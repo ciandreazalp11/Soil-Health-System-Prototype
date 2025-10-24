@@ -579,13 +579,95 @@ elif selected == "🤖 Modeling":
     else:
         df = st.session_state["df"].copy()
         st.subheader("Select Task")
-        task = st.radio("Choose modeling task:", ["Classification", "Regression"], index=0 if st.session_state["task_mode"] == "Classification" else 1)
-        if task != st.session_state["task_mode"]:
-            st.session_state["task_mode"] = task
-            st.session_state["current_theme"] = theme_classification if task == "Classification" else theme_sakura
-            apply_theme(st.session_state["current_theme"])
+        # --- Custom glowing C/R toggle (Option C: text inside knob + glow). ---
+        col_tog, col_label = st.columns([1, 4])
+        with col_tog:
+            mode_now = st.session_state.get("task_mode", "Classification")
+            is_reg = True if mode_now == "Regression" else False
+            # HTML/CSS for visual toggle (reflects current state). The actual state is toggled by the Streamlit button below.
+            toggle_html = f"""
+            <style>
+            .cr-toggle-container {{
+                display:flex;
+                align-items:center;
+                gap:12px;
+            }}
+            .cr-switch {{
+                width:72px;
+                height:40px;
+                border-radius:999px;
+                position:relative;
+                padding:6px;
+                box-sizing:border-box;
+                background: linear-gradient(90deg, rgba(0,0,0,0.08), rgba(255,255,255,0.02));
+                box-shadow: inset 0 -4px 12px rgba(0,0,0,0.25);
+            }}
+            .cr-track {{
+                position:absolute;
+                inset:6px;
+                border-radius:999px;
+                transition: background 300ms ease, box-shadow 300ms ease;
+                background: {'linear-gradient(90deg,#a5d6a7,#81c784)' if not is_reg else 'linear-gradient(90deg,#ffc1d3,#ff8aa2)'};
+                box-shadow: 0 6px 22px rgba(0,0,0,0.35), 0 0 24px rgba(0,0,0,0.12);
+            }}
+            .cr-knob {{
+                width:48px;
+                height:48px;
+                border-radius:50%;
+                position:relative;
+                top:-6px;
+                left:{'0px' if not is_reg else '24px'};
+                transition: left 280ms ease, box-shadow 280ms ease, transform 200ms ease;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                font-weight:800;
+                color:#021;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.45), 0 0 20px rgba(255,255,255,0.02);
+                background: {'linear-gradient(135deg,#e8f5e9,#a5d6a7)' if not is_reg else 'linear-gradient(135deg,#ffd6e0,#ff93b0)'};
+            }}
+            .cr-glow {{
+                position:absolute;
+                inset: -6px;
+                border-radius:999px;
+                filter: blur(18px);
+                opacity:0.85;
+                transition: background 300ms ease, opacity 300ms ease;
+                background: {'radial-gradient(circle at 30% 30%, rgba(129,199,132,0.28), rgba(129,199,132,0.06) 40%, rgba(0,0,0,0))' if not is_reg else 'radial-gradient(circle at 30% 30%, rgba(255,138,162,0.28), rgba(255,138,162,0.06) 40%, rgba(0,0,0,0))'};
+            }}
+            .cr-label {{
+                font-weight:700;
+                color: rgba(255,255,255,0.95);
+                font-size:15px;
+            }}
+            .cr-small {{
+                font-size:13px;color:rgba(255,255,255,0.8);margin-top:3px;
+            }}
+            </style>
 
-        st.markdown(f"Current Mode: **{st.session_state['task_mode']}**", unsafe_allow_html=True)
+            <div class="cr-toggle-container">
+              <div style="position:relative;">
+                <div class="cr-switch" aria-hidden="true">
+                  <div class="cr-track"></div>
+                  <div class="cr-glow"></div>
+                  <div class="cr-knob">{'R' if is_reg else 'C'}</div>
+                </div>
+              </div>
+            </div>
+            """
+            st.markdown(toggle_html, unsafe_allow_html=True)
+
+            # A small Streamlit button toggles the mode (keeps core logic simple and robust).
+            if st.button("Toggle Mode", key="__mode_toggle_btn__"):
+                new = "Regression" if st.session_state["task_mode"] == "Classification" else "Classification"
+                st.session_state["task_mode"] = new
+                st.session_state["current_theme"] = theme_classification if new == "Classification" else theme_sakura
+                apply_theme(st.session_state["current_theme"])
+                # rerun so the visual toggle updates immediately
+                st.experimental_rerun()
+
+        with col_label:
+            st.markdown(f"**Current Mode:** {st.session_state['task_mode']}", unsafe_allow_html=True)
 
         if 'Nitrogen' not in df.columns:
             st.error("Missing 'Nitrogen' column required as target. Ensure your dataset contains 'Nitrogen'.")
@@ -810,4 +892,3 @@ elif selected == "👤 About":
     st.write("Developed for a capstone project.")
 
 # End of file
-
