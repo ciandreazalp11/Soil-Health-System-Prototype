@@ -11,6 +11,9 @@ from sklearn.metrics import accuracy_score, classification_report, mean_squared_
 from io import BytesIO
 import joblib
 import time
+import base64
+from PIL import Image
+import io as sysio
 
 st.set_page_config(
     page_title="Machine Learning-Driven Soil Analysis for Sustainable Agriculture System",
@@ -43,9 +46,8 @@ theme_classification = {
     "title_color": "#a5d6a7",
 }
 
-# Revised Sakura theme: dark pink / sakura vibe but with high contrast so text remains readable
 theme_sakura = {
-    "background_main": "linear-gradient(120deg, #2b062b 0%, #3b0a3b 50%, #501347 100%)",  # dark mauve / deep pink gradient
+    "background_main": "linear-gradient(120deg, #2b062b 0%, #3b0a3b 50%, #501347 100%)",
     "sidebar_bg": "linear-gradient(180deg, rgba(30,8,30,0.95), rgba(45,10,45,0.95))",
     "primary_color": "#ff8aa2",
     "secondary_color": "#ffc1d3",
@@ -83,89 +85,122 @@ if "task_mode" not in st.session_state:
     st.session_state["task_mode"] = "Classification"  # default
 if "trained_on_features" not in st.session_state:
     st.session_state["trained_on_features"] = None
+# profile images stored in session as base64
+if "profile_andre" not in st.session_state:
+    st.session_state["profile_andre"] = None
+if "profile_rica" not in st.session_state:
+    st.session_state["profile_rica"] = None
 
-# ----------------- THEME APPLIER -----------------
+# ----------------- THEME APPLIER + BACKGROUND -----------------
 def apply_theme(theme):
     css = f"""
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
     <style>
-    .stApp {{ font-family: 'Montserrat', sans-serif; color:{theme['text_color']}; min-height:100vh; background: {theme['background_main']}; background-attachment: fixed; }}
-    section[data-testid="stSidebar"] {{ background: {theme['sidebar_bg']} !important; border-radius:12px; padding:18px; box-shadow: 0 12px 40px rgba(0,0,0,0.12); }}
-    div[data-testid="stSidebarNav"] a {{ color:{theme['nav_link_color']} !important; border-radius:8px; padding:10px; }}
-    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.02) !important; transform: translateX(4px); transition: all .12s; }}
-    h1,h2,h3,h4,h5,h6 {{ color:{theme['title_color']}; font-family: 'Playfair Display', serif; }}
-    .stButton button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; border-radius:10px; padding:0.45rem 0.9rem; font-weight:700; }}
-    .legend {{ background: rgba(0,0,0,0.04); border-radius:8px; padding:8px; color:{theme['text_color']}; font-size:13px; margin-top:10px; border: 1px solid {theme['primary_color']}30; }}
-    .footer {{ text-align:center; color:{theme['secondary_color']}; font-size:13px; padding:10px; margin-top:18px; }}
-    .stDownloadButton>button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; }}
-
-    /* Toggle switch style used for task mode toggle */
-    .switch {{
+    /* Main app + background decorative shapes */
+    .stApp {{
+      font-family: 'Montserrat', sans-serif;
+      color:{theme['text_color']};
+      min-height:100vh;
+      background: {theme['background_main']};
+      background-attachment: fixed;
       position: relative;
-      display: inline-block;
-      width: 52px;
-      height: 28px;
+      overflow: hidden;
     }}
-    .switch input {{display:none;}}
-    .slider {{
+    /* soft decorative blobs in background */
+    .bg-decor {{
       position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(255,255,255,0.12);
-      transition: .4s;
-      border-radius: 34px;
-      box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+      right: -8%;
+      top: -12%;
+      width: 55vmax;
+      height: 55vmax;
+      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.03), transparent 10%),
+                  radial-gradient(circle at 80% 80%, rgba(255,255,255,0.02), transparent 25%);
+      transform: rotate(12deg) scale(1.1);
+      filter: blur(36px);
+      z-index: 0;
+      pointer-events: none;
     }}
-    .slider:before {{
-      position: absolute;
-      content: "";
-      height: 22px;
-      width: 22px;
-      left: 4px;
-      bottom: 3px;
-      background: white;
-      transition: .4s;
-      border-radius: 50%;
+    section[data-testid="stSidebar"] {{
+      background: {theme['sidebar_bg']} !important;
+      border-radius:12px;
+      padding:18px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+      z-index: 2;
     }}
-    input:checked + .slider {{
-      background: linear-gradient(90deg, {theme['header_glow_color_1']}, {theme['header_glow_color_2']});
+    /* modernized header card in sidebar */
+    .sidebar-header {{
+      padding: 12px;
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      margin-bottom: 12px;
+      border: 1px solid rgba(255,255,255,0.03);
     }}
-    input:checked + .slider:before {{
-      transform: translateX(24px);
+    .sidebar-title {{ font-family: 'Playfair Display', serif; color:{theme['title_color']}; margin:0; }}
+    .sidebar-sub {{ font-size:12px; color:{theme['secondary_color']}; margin-top:6px; opacity:0.95; }}
+    /* make the menu links a bit more spaced and larger hit area */
+    div[data-testid="stSidebarNav"] a {{
+      color:{theme['nav_link_color']} !important;
+      border-radius:8px;
+      padding:10px 12px!important;
+      margin-bottom:6px!important;
+      display:block!important;
+      transition: all .12s;
+      font-size:15px!important;
     }}
-
-    /* Small form tweaks */
+    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.03) !important; transform: translateX(6px); }}
+    div[data-testid="stSidebarNav"] a[aria-current="page"] {{ background:{theme['nav_link_selected_bg']}!important; color:#0b0b0b!important; box-shadow:0 6px 16px rgba(0,0,0,0.25); }}
+    h1,h2,h3,h4,h5,h6 {{ color:{theme['title_color']}; font-family: 'Playfair Display', serif; z-index: 3; }}
+    .stButton button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; border-radius:10px; padding:0.45rem 0.9rem; font-weight:700; }}
+    .stDownloadButton>button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; }}
+    .profile-circle {{
+      width:120px;
+      height:120px;
+      border-radius:50%;
+      display:inline-block;
+      vertical-align: middle;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 18px rgba(0,0,0,0.35);
+      background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(0,0,0,0.04));
+      border: 4px solid rgba(255,255,255,0.04);
+      overflow:hidden;
+      text-align:center;
+      line-height:120px;
+    }}
+    .profile-holo {{
+      background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+      padding:6px;
+      border-radius:50%;
+      display:inline-block;
+    }}
+    .profile-name {{ margin-top:8px; font-weight:700; color:{theme['secondary_color']}; }}
+    .uploader-hint {{ font-size:12px; color:{theme['text_color']}; opacity:0.7; }}
+    /* small form tweaks */
     div[data-testid="stToolbar"] {{ background: transparent; }}
+    /* reduce verbose text in option_menu button (we removed instructions by default) */
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+    # decorative blobs (single element)
+    st.markdown('<div class="bg-decor"></div>', unsafe_allow_html=True)
 
 apply_theme(st.session_state["current_theme"])
 
-# ----------------- SIDEBAR -----------------
+# ----------------- SIDEBAR (redesigned) -----------------
 with st.sidebar:
     st.markdown(
         f"""
-        <div style="padding:6px 0 12px 0;">
-          <h2 style="margin:0; color:{st.session_state['current_theme']['title_color']};">🌱 Soil Health System</h2>
-          <div style="font-size:13px; color:{st.session_state['current_theme']['secondary_color']}; margin-top:6px;">
-            Machine Learning-Driven Soil Analysis for Sustainable Agriculture
-          </div>
-          <div style="margin-top:8px; font-size:11px; color:{st.session_state['current_theme']['text_color']}; opacity:0.85;">
-            <em>Capstone Project</em>
-          </div>
+        <div class="sidebar-header">
+          <h2 class="sidebar-title">🌱 Soil Health System</h2>
+          <div class="sidebar-sub">ML-Driven Soil Analysis</div>
         </div>
         """,
         unsafe_allow_html=True
     )
     st.write("---")
+
     selected = option_menu(
         None,
-        ["🏠 Home", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights"],
-        icons=["house", "bar-chart", "robot", "graph-up", "lightbulb"],
+        ["🏠 Home", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights", "👤 About"],
+        icons=["house", "bar-chart", "robot", "graph-up", "lightbulb", "person-circle"],
         menu_icon="list",
         default_index=0,
         styles={
@@ -176,8 +211,8 @@ with st.sidebar:
         }
     )
     st.write("---")
-    st.markdown("Developed for sustainable agriculture — upload soil tests, visualize, and model.")
-    st.caption("Tip: Use the toggle on the home page to switch between Classification (default) and Regression (Sakura).")
+    # minimal footer text
+    st.markdown(f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>", unsafe_allow_html=True)
 
 # ----------------- COMMON SETTINGS -----------------
 column_mapping = {
@@ -222,7 +257,51 @@ def interpret_label(label):
         return ("Moderate", "orange", "⚠️ Some nutrient imbalance. Consider minor adjustments.")
     return ("Poor", "red", "🚫 Deficient or problematic — take corrective action.")
 
-# Reusable upload & preprocess function (used on Home)
+# ----------------- PROFILE / AVATAR HELPERS -----------------
+def pil_to_base64(img: Image.Image, fmt="PNG"):
+    buf = sysio.BytesIO()
+    img.save(buf, format=fmt)
+    b = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return b
+
+def render_profile(name, session_key, upload_key):
+    st.markdown("<div style='display:flex;align-items:center;gap:12px;'>", unsafe_allow_html=True)
+    # show circle (either placeholder holo or uploaded image)
+    img_b64 = st.session_state.get(session_key)
+    if img_b64:
+        html = f"""
+        <div class='profile-holo'>
+          <div class='profile-circle'>
+            <img src='data:image/png;base64,{img_b64}' style='width:120px;height:120px;object-fit:cover;border-radius:50%;display:block;'/>
+          </div>
+        </div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        placeholder = f"""
+        <div class='profile-holo'>
+          <div class='profile-circle' style='background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));'>
+            <div style='font-size:36px;line-height:120px;opacity:0.65;'>👤</div>
+          </div>
+        </div>
+        """
+        st.markdown(placeholder, unsafe_allow_html=True)
+
+    st.markdown(f"<div style='display:block'><div class='profile-name'>{name}</div><div class='uploader-hint'>Upload an image to replace placeholder</div></div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # uploader underneath
+    file = st.file_uploader(f"Choose {name} profile image (optional)", type=['png','jpg','jpeg'], key=upload_key)
+    if file:
+        try:
+            img = Image.open(file).convert("RGB")
+            img_b64_new = pil_to_base64(img)
+            st.session_state[session_key] = img_b64_new
+            st.success(f"{name} profile updated.")
+        except Exception as e:
+            st.error(f"Couldn't read the image: {e}")
+
+# ----------------- Reusable upload & preprocess function (used on Home) -----------------
 def upload_and_preprocess_widget():
     st.markdown("### 📂 Upload Soil Data")
     st.markdown("Upload one or more soil analysis files (.csv or .xlsx). The app will attempt to standardize column names and auto-preprocess numeric columns.")
@@ -286,44 +365,23 @@ def upload_and_preprocess_widget():
         else:
             st.error("No valid sheets processed. Check file formats and column headers.")
 
-# ----------------- HOME (merged with Upload) -----------------
+# ----------------- HOME (with lighter toggle) -----------------
 if selected == "🏠 Home":
     st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
     st.markdown("<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>", unsafe_allow_html=True)
     st.write("---")
 
-    # Task mode toggle (on/off switch). Checked == Regression (Sakura), unchecked == Classification
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        st.markdown("#### Mode")
-        # render a custom-looking toggle using HTML + checkbox
-        mode_checked = st.checkbox("Sakura / Regression mode", value=(st.session_state["task_mode"] == "Regression"), key="home_mode_toggle")
-    with col_b:
-        # show quick model indicator
-        if st.session_state.get("model") is not None:
-            st.markdown("**Model:**")
-            st.write(f"- {st.session_state.get('results', {}).get('model_name','Random Forest')}")
-            st.write(f"- Task: {st.session_state.get('results', {}).get('task', st.session_state['task_mode'])}")
-            trained_feats = st.session_state.get("trained_on_features") or []
-            if trained_feats:
-                st.write(f"- Features: {', '.join(trained_feats[:5])}{'...' if len(trained_feats) > 5 else ''}")
-        else:
-            st.info("No model trained yet. Use Upload to add data and Start Quick Model or go to Modeling.")
-
-    # apply mode change & theme switching
-    if mode_checked and st.session_state["task_mode"] != "Regression":
-        st.session_state["task_mode"] = "Regression"
-        st.session_state["current_theme"] = theme_sakura
-        apply_theme(st.session_state["current_theme"])
-    elif not mode_checked and st.session_state["task_mode"] != "Classification":
-        st.session_state["task_mode"] = "Classification"
-        st.session_state["current_theme"] = theme_classification
+    # Use a light toggle (select slider) to switch task mode visually like a toggle
+    st.markdown("#### Mode")
+    new_mode = st.select_slider("", options=["Classification", "Regression"], value=st.session_state["task_mode"], key="home_mode_slider")
+    if new_mode != st.session_state["task_mode"]:
+        st.session_state["task_mode"] = new_mode
+        st.session_state["current_theme"] = theme_classification if new_mode == "Classification" else theme_sakura
         apply_theme(st.session_state["current_theme"])
 
     st.markdown(f"**Current Mode:** {st.session_state['task_mode']}")
     st.write("---")
 
-    # Upload widget is included in Home (merged)
     upload_and_preprocess_widget()
 
     # Quick Modeling box (same as before, but placed on Home)
@@ -336,7 +394,6 @@ if selected == "🏠 Home":
                                   index=0 if st.session_state["task_mode"] == "Classification" else 1, key="quick_mode_radio_home")
         with col2:
             if quick_mode != st.session_state["task_mode"]:
-                # change theme appropriately
                 st.session_state["task_mode"] = quick_mode
                 st.session_state["current_theme"] = theme_classification if quick_mode == "Classification" else theme_sakura
                 apply_theme(st.session_state["current_theme"])
@@ -358,7 +415,6 @@ if selected == "🏠 Home":
                     if X.shape[1] == 0:
                         st.error("No numeric features available for quick modeling after dropping the target.")
                     else:
-                        # Quick scaler, split, train
                         scaler = MinMaxScaler()
                         X_scaled = scaler.fit_transform(X)
                         X_df = pd.DataFrame(X_scaled, columns=X.columns)
@@ -380,7 +436,7 @@ if selected == "🏠 Home":
                             "task": quick_mode,
                             "y_test": y_test.tolist(),
                             "y_pred": np.array(y_pred).tolist(),
-                            "model_name": "Random Forest (Quick)",
+                            "model_name": f"Random Forest {quick_mode} Model (Quick)",
                             "X_columns": X.columns.tolist(),
                             "feature_importances": model.feature_importances_.tolist()
                         }
@@ -397,9 +453,11 @@ if selected == "🏠 Home":
         y_pred = np.array(r.get("y_pred", []))
         col1, col2, col3 = st.columns(3)
         if task == "Classification" and len(y_test) > 0:
-            acc = accuracy_score(y_test, y_pred)
-            col1.metric("Accuracy", f"{acc:.3f}")
-            # small confusion matrix preview
+            try:
+                acc = accuracy_score(y_test, y_pred)
+                col1.metric("Accuracy", f"{acc:.3f}")
+            except Exception:
+                col1.write("Accuracy N/A")
             try:
                 cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
                 fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis)
@@ -407,7 +465,6 @@ if selected == "🏠 Home":
                 col2.plotly_chart(fig_cm, use_container_width=True)
             except Exception:
                 col2.write("Confusion matrix not available")
-            # top features
             fi = r.get("feature_importances", [])
             feat = r.get("X_columns", [])
             if fi and feat:
@@ -485,7 +542,6 @@ elif selected == "🤖 Modeling":
         st.info("Please upload a dataset first in 'Home'.")
     else:
         df = st.session_state["df"].copy()
-        # task selection and theme switch (kept here for advanced users)
         st.subheader("Select Task")
         task = st.radio("Choose modeling task:", ["Classification", "Regression"], index=0 if st.session_state["task_mode"] == "Classification" else 1)
         if task != st.session_state["task_mode"]:
@@ -561,7 +617,7 @@ elif selected == "🤖 Modeling":
                     "task": st.session_state["task_mode"],
                     "y_test": y_test.tolist(),
                     "y_pred": np.array(y_pred).tolist(),
-                    "model_name": "Random Forest",
+                    "model_name": f"Random Forest {st.session_state['task_mode']} Model",
                     "X_columns": selected_features,
                     "feature_importances": model.feature_importances_.tolist(),
                     "cv_summary": cv_summary
@@ -601,7 +657,7 @@ elif selected == "📈 Results":
         y_pred = np.array(results["y_pred"])
 
         st.subheader("Model Summary")
-        st.write(f"Model: **{results.get('model_name','Random Forest')}**")
+        st.write(f"Model: **{results.get('model_name','Random Forest Model')}**")
         st.write(f"Task: **{task}**")
         if results.get("cv_summary"):
             cv = results["cv_summary"]
@@ -609,8 +665,11 @@ elif selected == "📈 Results":
 
         st.subheader("Performance Metrics")
         if task == "Classification":
-            acc = accuracy_score(y_test, y_pred)
-            st.metric("Accuracy", f"{acc:.3f}")
+            try:
+                acc = accuracy_score(y_test, y_pred)
+                st.metric("Accuracy", f"{acc:.3f}")
+            except Exception:
+                st.write("Accuracy N/A")
             st.markdown("**Classification Report**")
             try:
                 report = classification_report(y_test, y_pred, output_dict=False)
@@ -630,14 +689,12 @@ elif selected == "📈 Results":
             st.metric("MAE", f"{mae:.3f}")
             st.metric("R²", f"{r2:.3f}")
 
-            # Scatter y_test vs y_pred
             df_res = pd.DataFrame({"y_test": y_test, "y_pred": y_pred})
             fig_scatter = px.scatter(df_res, x="y_test", y="y_pred", trendline="ols",
                                      title="Actual vs Predicted Nitrogen")
             fig_scatter.update_layout(template="plotly_dark")
             st.plotly_chart(fig_scatter, use_container_width=True)
 
-            # Residuals
             df_res["residual"] = df_res["y_test"] - df_res["y_pred"]
             fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
             fig_res.update_layout(template="plotly_dark")
@@ -679,7 +736,6 @@ elif selected == "🌿 Insights":
     if st.session_state["results"] is None:
         st.info("Train a model to get data-driven insights.")
     else:
-        # Basic insights derived from trained model's feature importances and sample medians
         df = st.session_state["df"]
         fi = st.session_state["results"].get("feature_importances", [])
         feat = st.session_state["results"].get("X_columns", [])
@@ -700,3 +756,29 @@ elif selected == "🌿 Insights":
                     st.success("Nitrogen levels are moderate across samples.")
         else:
             st.info("No model-based insights available yet. Train a model first.")
+
+# ----------------- ABOUT / PROFILE -----------------
+elif selected == "👤 About":
+    st.title("👤 About the Makers")
+    st.markdown("Developed by:")
+    st.write("")  # spacing
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        render_profile("Andre Oneal A. Plaza", "profile_andre", "upload_andre")
+    with col_b:
+        render_profile("Rica Baliling", "profile_rica", "upload_rica")
+
+    st.markdown("---")
+    st.markdown("How to add profile pictures (3 options):")
+    st.markdown("""
+    1. Quick (recommended while testing locally): Use the 'Choose ... profile image' uploader above to upload an image directly while running the app. The image will be stored in the session memory while the app runs.
+    2. For deployment (permanent): add your image files to the repository (e.g., an 'assets' folder) and reference them by their raw GitHub URL (raw.githubusercontent.com/youruser/yourrepo/branch/assets/andre.png). Then replace the session image by setting session state or editing the code to use the raw URL.
+    3. Host externally: upload images to an image host (e.g., Imgur, Cloudinary) and use the hosted image URL in your code or session.
+    """)
+    st.markdown("If you want me to add direct support to load from a GitHub raw URL or from an assets folder automatically, I can add that in the next revision.")
+
+    st.markdown("---")
+    st.markdown("Credits & Contact")
+    st.write("Developed for a capstone project. Feel free to include an email or GitHub handle here.")
+
+# End of file
