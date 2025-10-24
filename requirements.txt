@@ -3,5 +3,6 @@ pandas
 numpy
 plotly
 scikit-learn
-openpyxl
 streamlit-option-menu
+openpyxl # For reading .xlsx files
+joblib # For saving/loading models (though not directly used in the provided code's session state)
