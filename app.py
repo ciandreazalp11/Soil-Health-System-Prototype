@@ -43,28 +43,29 @@ theme_classification = {
     "title_color": "#a5d6a7",
 }
 
+# Revised Sakura theme: dark pink / sakura vibe but with high contrast so text remains readable
 theme_sakura = {
-    "background_main": "linear-gradient(120deg, #fff0f6 0%, #ffe4ec 40%, #ffeef8 100%)",
-    "sidebar_bg": "rgba(255, 239, 245, 0.95)",
-    "primary_color": "#f06292",
-    "secondary_color": "#f8bbd0",
+    "background_main": "linear-gradient(120deg, #2b062b 0%, #3b0a3b 50%, #501347 100%)",  # dark mauve / deep pink gradient
+    "sidebar_bg": "linear-gradient(180deg, rgba(30,8,30,0.95), rgba(45,10,45,0.95))",
+    "primary_color": "#ff8aa2",
+    "secondary_color": "#ffc1d3",
     "button_gradient": "linear-gradient(90deg, #ff8aa2, #ff3b70)",
-    "button_text": "#2e1c27",
-    "header_glow_color_1": "#f8bbd0",
-    "header_glow_color_2": "#f06292",
-    "menu_icon_color": "#f06292",
-    "nav_link_color": "#4a2a3a",
-    "nav_link_selected_bg": "#ff93b0",
-    "info_bg": "#fff1f6",
-    "info_border": "#f06292",
-    "success_bg": "#ffeef4",
-    "success_border": "#f06292",
-    "warning_bg": "#fff4e6",
-    "warning_border": "#ffd580",
-    "error_bg": "#fff0f0",
-    "error_border": "#ffb3b3",
-    "text_color": "#3a2a31",
-    "title_color": "#70263b",
+    "button_text": "#1f0f16",
+    "header_glow_color_1": "#ff93b0",
+    "header_glow_color_2": "#ff3b70",
+    "menu_icon_color": "#ff93b0",
+    "nav_link_color": "#ffd6e0",
+    "nav_link_selected_bg": "#ff3b70",
+    "info_bg": "#40132a",
+    "info_border": "#ff93b0",
+    "success_bg": "#3a1b2a",
+    "success_border": "#ff93b0",
+    "warning_bg": "#3b2530",
+    "warning_border": "#ffb3b3",
+    "error_bg": "#3a1a22",
+    "error_border": "#ff9aa3",
+    "text_color": "#ffeef8",
+    "title_color": "#ffd6e0",
 }
 
 # Session state defaults
@@ -89,14 +90,53 @@ def apply_theme(theme):
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
     <style>
     .stApp {{ font-family: 'Montserrat', sans-serif; color:{theme['text_color']}; min-height:100vh; background: {theme['background_main']}; background-attachment: fixed; }}
-    section[data-testid="stSidebar"] {{ background: {theme['sidebar_bg']} !important; border-radius:12px; padding:18px; box-shadow: 0 12px 40px rgba(0,0,0,0.06); }}
+    section[data-testid="stSidebar"] {{ background: {theme['sidebar_bg']} !important; border-radius:12px; padding:18px; box-shadow: 0 12px 40px rgba(0,0,0,0.12); }}
     div[data-testid="stSidebarNav"] a {{ color:{theme['nav_link_color']} !important; border-radius:8px; padding:10px; }}
-    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(0,0,0,0.03) !important; transform: translateX(4px); transition: all .12s; }}
+    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.02) !important; transform: translateX(4px); transition: all .12s; }}
     h1,h2,h3,h4,h5,h6 {{ color:{theme['title_color']}; font-family: 'Playfair Display', serif; }}
     .stButton button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; border-radius:10px; padding:0.45rem 0.9rem; font-weight:700; }}
     .legend {{ background: rgba(0,0,0,0.04); border-radius:8px; padding:8px; color:{theme['text_color']}; font-size:13px; margin-top:10px; border: 1px solid {theme['primary_color']}30; }}
     .footer {{ text-align:center; color:{theme['secondary_color']}; font-size:13px; padding:10px; margin-top:18px; }}
     .stDownloadButton>button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; }}
+
+    /* Toggle switch style used for task mode toggle */
+    .switch {{
+      position: relative;
+      display: inline-block;
+      width: 52px;
+      height: 28px;
+    }}
+    .switch input {{display:none;}}
+    .slider {{
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255,255,255,0.12);
+      transition: .4s;
+      border-radius: 34px;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+    }}
+    .slider:before {{
+      position: absolute;
+      content: "";
+      height: 22px;
+      width: 22px;
+      left: 4px;
+      bottom: 3px;
+      background: white;
+      transition: .4s;
+      border-radius: 50%;
+    }}
+    input:checked + .slider {{
+      background: linear-gradient(90deg, {theme['header_glow_color_1']}, {theme['header_glow_color_2']});
+    }}
+    input:checked + .slider:before {{
+      transform: translateX(24px);
+    }}
+
     /* Small form tweaks */
     div[data-testid="stToolbar"] {{ background: transparent; }}
     </style>
@@ -107,15 +147,27 @@ apply_theme(st.session_state["current_theme"])
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("### 🌱 Soil Health System")
-    st.markdown("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
+    st.markdown(
+        f"""
+        <div style="padding:6px 0 12px 0;">
+          <h2 style="margin:0; color:{st.session_state['current_theme']['title_color']};">🌱 Soil Health System</h2>
+          <div style="font-size:13px; color:{st.session_state['current_theme']['secondary_color']}; margin-top:6px;">
+            Machine Learning-Driven Soil Analysis for Sustainable Agriculture
+          </div>
+          <div style="margin-top:8px; font-size:11px; color:{st.session_state['current_theme']['text_color']}; opacity:0.85;">
+            <em>Capstone Project</em>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     st.write("---")
     selected = option_menu(
         None,
-        ["🏠 Home", "📂 Upload Data", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights"],
-        icons=["house", "cloud-upload", "bar-chart", "robot", "graph-up", "lightbulb"],
+        ["🏠 Home", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights"],
+        icons=["house", "bar-chart", "robot", "graph-up", "lightbulb"],
         menu_icon="list",
-        default_index=1,
+        default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
             "icon": {"color": st.session_state["current_theme"]["menu_icon_color"], "font-size": "18px"},
@@ -125,7 +177,7 @@ with st.sidebar:
     )
     st.write("---")
     st.markdown("Developed for sustainable agriculture — upload soil tests, visualize, and model.")
-    st.caption("Tip: After upload use the quick 'Start Model' to get immediate Random Forest insights, or go to Modeling for advanced configuration.")
+    st.caption("Tip: Use the toggle on the home page to switch between Classification (default) and Regression (Sakura).")
 
 # ----------------- COMMON SETTINGS -----------------
 column_mapping = {
@@ -170,29 +222,9 @@ def interpret_label(label):
         return ("Moderate", "orange", "⚠️ Some nutrient imbalance. Consider minor adjustments.")
     return ("Poor", "red", "🚫 Deficient or problematic — take corrective action.")
 
-# ----------------- HOME -----------------
-if selected == "🏠 Home":
-    st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
-    st.subheader("Welcome")
-    st.markdown(
-        """
-        This interactive app helps agronomists, researchers, and farmers:
-        - Upload & clean soil laboratory datasets.
-        - Visualize distributions, correlations, and outliers.
-        - Train Random Forest models (Classification for fertility bands or Regression for precise Nitrogen level).
-        - Get model metrics, feature importance and make predictions for new soil samples.
-        
-        Quick workflow:
-        1. Upload soil datasets in the 'Upload Data' tab.
-        2. Use 'Start Model' for a quick Random Forest run or go to 'Modeling' for advanced control.
-        3. Inspect results in 'Results' and iterate.
-        """
-    )
-    st.info("Default modeling mode is Classification. You can switch to Regression (Sakura theme) in Upload Data or Modeling pages.")
-
-# ----------------- UPLOAD DATA -----------------
-elif selected == "📂 Upload Data":
-    st.title("📂 Upload Soil Data")
+# Reusable upload & preprocess function (used on Home)
+def upload_and_preprocess_widget():
+    st.markdown("### 📂 Upload Soil Data")
     st.markdown("Upload one or more soil analysis files (.csv or .xlsx). The app will attempt to standardize column names and auto-preprocess numeric columns.")
     uploaded_files = st.file_uploader("Select datasets", type=['csv', 'xlsx'], accept_multiple_files=True)
 
@@ -251,74 +283,161 @@ elif selected == "📂 Upload Data":
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
             download_df_button(df)
-
-            # Quick mode selector and Start Model button (per user request)
-            st.markdown("### Quick Modeling (one-click)")
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                quick_mode = st.radio("Select quick modeling mode:", ["Classification", "Regression"],
-                                      index=0, key="quick_mode_radio")
-            with col2:
-                if quick_mode != st.session_state["task_mode"]:
-                    # change theme appropriately
-                    st.session_state["task_mode"] = quick_mode
-                    st.session_state["current_theme"] = theme_classification if quick_mode == "Classification" else theme_sakura
-                    apply_theme(st.session_state["current_theme"])
-
-                if st.button("▶️ Start Quick Model"):
-                    # Validate presence of Nitrogen
-                    if 'Nitrogen' not in df.columns:
-                        st.error("The 'Nitrogen' column is required for modeling. Please ensure your uploaded data includes Nitrogen.")
-                    else:
-                        # Prepare X, y
-                        df_local = df.copy()
-                        if quick_mode == "Classification":
-                            df_local['Fertility_Level'] = create_fertility_label(df_local, col='Nitrogen', q=3)
-                            y = df_local['Fertility_Level']
-                        else:
-                            y = df_local['Nitrogen']
-
-                        X = df_local.select_dtypes(include=[np.number]).drop(columns=['Nitrogen'], errors='ignore')
-                        if X.shape[1] == 0:
-                            st.error("No numeric features available for quick modeling after dropping the target.")
-                        else:
-                            # Quick scaler, split, train
-                            scaler = MinMaxScaler()
-                            X_scaled = scaler.fit_transform(X)
-                            X_df = pd.DataFrame(X_scaled, columns=X.columns)
-                            X_train, X_test, y_train, y_test = train_test_split(X_df, y, test_size=0.2, random_state=42)
-
-                            if quick_mode == "Classification":
-                                model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
-                            else:
-                                model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
-
-                            with st.spinner("Training quick Random Forest..."):
-                                model.fit(X_train, y_train)
-                                y_pred = model.predict(X_test)
-
-                            # Save into session
-                            st.session_state["model"] = model
-                            st.session_state["scaler"] = scaler
-                            st.session_state["results"] = {
-                                "task": quick_mode,
-                                "y_test": y_test.tolist(),
-                                "y_pred": np.array(y_pred).tolist(),
-                                "model_name": "Random Forest (Quick)",
-                                "X_columns": X.columns.tolist(),
-                                "feature_importances": model.feature_importances_.tolist()
-                            }
-                            st.session_state["trained_on_features"] = X.columns.tolist()
-                            st.success("✅ Quick model trained. Navigate to 'Results' to inspect performance.")
         else:
             st.error("No valid sheets processed. Check file formats and column headers.")
+
+# ----------------- HOME (merged with Upload) -----------------
+if selected == "🏠 Home":
+    st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
+    st.markdown("<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>", unsafe_allow_html=True)
+    st.write("---")
+
+    # Task mode toggle (on/off switch). Checked == Regression (Sakura), unchecked == Classification
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        st.markdown("#### Mode")
+        # render a custom-looking toggle using HTML + checkbox
+        mode_checked = st.checkbox("Sakura / Regression mode", value=(st.session_state["task_mode"] == "Regression"), key="home_mode_toggle")
+    with col_b:
+        # show quick model indicator
+        if st.session_state.get("model") is not None:
+            st.markdown("**Model:**")
+            st.write(f"- {st.session_state.get('results', {}).get('model_name','Random Forest')}")
+            st.write(f"- Task: {st.session_state.get('results', {}).get('task', st.session_state['task_mode'])}")
+            trained_feats = st.session_state.get("trained_on_features") or []
+            if trained_feats:
+                st.write(f"- Features: {', '.join(trained_feats[:5])}{'...' if len(trained_feats) > 5 else ''}")
+        else:
+            st.info("No model trained yet. Use Upload to add data and Start Quick Model or go to Modeling.")
+
+    # apply mode change & theme switching
+    if mode_checked and st.session_state["task_mode"] != "Regression":
+        st.session_state["task_mode"] = "Regression"
+        st.session_state["current_theme"] = theme_sakura
+        apply_theme(st.session_state["current_theme"])
+    elif not mode_checked and st.session_state["task_mode"] != "Classification":
+        st.session_state["task_mode"] = "Classification"
+        st.session_state["current_theme"] = theme_classification
+        apply_theme(st.session_state["current_theme"])
+
+    st.markdown(f"**Current Mode:** {st.session_state['task_mode']}")
+    st.write("---")
+
+    # Upload widget is included in Home (merged)
+    upload_and_preprocess_widget()
+
+    # Quick Modeling box (same as before, but placed on Home)
+    if st.session_state["df"] is not None:
+        df = st.session_state["df"]
+        st.markdown("### Quick Modeling (one-click)")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            quick_mode = st.radio("Select quick modeling mode:", ["Classification", "Regression"],
+                                  index=0 if st.session_state["task_mode"] == "Classification" else 1, key="quick_mode_radio_home")
+        with col2:
+            if quick_mode != st.session_state["task_mode"]:
+                # change theme appropriately
+                st.session_state["task_mode"] = quick_mode
+                st.session_state["current_theme"] = theme_classification if quick_mode == "Classification" else theme_sakura
+                apply_theme(st.session_state["current_theme"])
+
+            if st.button("▶️ Start Quick Model"):
+                # Validate presence of Nitrogen
+                if 'Nitrogen' not in df.columns:
+                    st.error("The 'Nitrogen' column is required for modeling. Please ensure your uploaded data includes Nitrogen.")
+                else:
+                    # Prepare X, y
+                    df_local = df.copy()
+                    if quick_mode == "Classification":
+                        df_local['Fertility_Level'] = create_fertility_label(df_local, col='Nitrogen', q=3)
+                        y = df_local['Fertility_Level']
+                    else:
+                        y = df_local['Nitrogen']
+
+                    X = df_local.select_dtypes(include=[np.number]).drop(columns=['Nitrogen'], errors='ignore')
+                    if X.shape[1] == 0:
+                        st.error("No numeric features available for quick modeling after dropping the target.")
+                    else:
+                        # Quick scaler, split, train
+                        scaler = MinMaxScaler()
+                        X_scaled = scaler.fit_transform(X)
+                        X_df = pd.DataFrame(X_scaled, columns=X.columns)
+                        X_train, X_test, y_train, y_test = train_test_split(X_df, y, test_size=0.2, random_state=42)
+
+                        if quick_mode == "Classification":
+                            model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+                        else:
+                            model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+
+                        with st.spinner("Training quick Random Forest..."):
+                            model.fit(X_train, y_train)
+                            y_pred = model.predict(X_test)
+
+                        # Save into session
+                        st.session_state["model"] = model
+                        st.session_state["scaler"] = scaler
+                        st.session_state["results"] = {
+                            "task": quick_mode,
+                            "y_test": y_test.tolist(),
+                            "y_pred": np.array(y_pred).tolist(),
+                            "model_name": "Random Forest (Quick)",
+                            "X_columns": X.columns.tolist(),
+                            "feature_importances": model.feature_importances_.tolist()
+                        }
+                        st.session_state["trained_on_features"] = X.columns.tolist()
+                        st.success("✅ Quick model trained. Navigate to 'Results' to inspect performance.")
+
+    # Home-level compact results indicator (if model exists)
+    if st.session_state.get("results"):
+        st.write("---")
+        st.markdown("### Model Indicator")
+        r = st.session_state["results"]
+        task = r.get("task", st.session_state["task_mode"])
+        y_test = np.array(r.get("y_test", []))
+        y_pred = np.array(r.get("y_pred", []))
+        col1, col2, col3 = st.columns(3)
+        if task == "Classification" and len(y_test) > 0:
+            acc = accuracy_score(y_test, y_pred)
+            col1.metric("Accuracy", f"{acc:.3f}")
+            # small confusion matrix preview
+            try:
+                cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
+                fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis)
+                fig_cm.update_layout(height=220, template="plotly_dark")
+                col2.plotly_chart(fig_cm, use_container_width=True)
+            except Exception:
+                col2.write("Confusion matrix not available")
+            # top features
+            fi = r.get("feature_importances", [])
+            feat = r.get("X_columns", [])
+            if fi and feat:
+                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+                top = df_fi.head(3)
+                col3.markdown("**Top features**")
+                for i, row in top.iterrows():
+                    col3.write(f"- {row['feature']} ({row['importance']:.2f})")
+        elif task == "Regression" and len(y_test) > 0:
+            mse = mean_squared_error(y_test, y_pred)
+            rmse = np.sqrt(mse)
+            col1.metric("RMSE", f"{rmse:.3f}")
+            col2.write("Sample predictions")
+            sample_df = pd.DataFrame({"actual": y_test[:6], "pred": y_pred[:6]})
+            col2.dataframe(sample_df)
+            fi = r.get("feature_importances", [])
+            feat = r.get("X_columns", [])
+            if fi and feat:
+                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+                top = df_fi.head(3)
+                col3.markdown("**Top features**")
+                for i, row in top.iterrows():
+                    col3.write(f"- {row['feature']} ({row['importance']:.2f})")
 
 # ----------------- VISUALIZATION -----------------
 elif selected == "📊 Visualization":
     st.title("📊 Data Visualization")
     st.markdown("Explore distributions, correlations, and relationships in your preprocessed data.")
     if st.session_state["df"] is None:
-        st.info("Please upload data first in 'Upload Data'.")
+        st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
     else:
         df = st.session_state["df"]
         if 'Nitrogen' in df.columns and 'Fertility_Level' not in df.columns:
@@ -363,10 +482,10 @@ elif selected == "🤖 Modeling":
     st.markdown("Fine tune hyperparameters and train Random Forest models for Classification or Regression.")
 
     if st.session_state["df"] is None:
-        st.info("Please upload a dataset first in 'Upload Data'.")
+        st.info("Please upload a dataset first in 'Home'.")
     else:
         df = st.session_state["df"].copy()
-        # task selection and theme switch
+        # task selection and theme switch (kept here for advanced users)
         st.subheader("Select Task")
         task = st.radio("Choose modeling task:", ["Classification", "Regression"], index=0 if st.session_state["task_mode"] == "Classification" else 1)
         if task != st.session_state["task_mode"]:
@@ -468,7 +587,7 @@ elif selected == "🤖 Modeling":
                 else:
                     st.markdown(f"**Predicted Nitrogen:** <span style='color:{st.session_state['current_theme']['primary_color']};font-weight:700'>{pred[0]:.3f}</span>", unsafe_allow_html=True)
         else:
-            st.info("Train a model in this page or use the 'Start Quick Model' from Upload Data to get a quick result.")
+            st.info("Train a model in this page or use the 'Start Quick Model' from Home to get a quick result.")
 
 # ----------------- RESULTS -----------------
 elif selected == "📈 Results":
