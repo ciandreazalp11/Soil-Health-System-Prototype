@@ -806,7 +806,8 @@ elif selected == "👤 About":
         render_profile("Rica Baliling", "profile_rica", "upload_rica")
 
     st.markdown("---")
-    st.markdown("Credits & Contact")
-    st.write("Developed for a capstone project. Feel free to include an email or GitHub handle here.")
+    st.markdown("all god to be glory")
+    st.write("Developed for a capstone project.")
 
 # End of file
+
