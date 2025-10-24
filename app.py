@@ -483,4 +483,6 @@ elif selected == "📈 Results":
         y_pred = np.array(results["y_pred"])
         
         if len(y_test) != len(y_pred):
-            st.error("⚠️ Mismatch between test and prediction lengths.
+            st.error("⚠️ Mismatch between test and prediction lengths. Please retrain your model.") # Added the closing quote and a bit more helpful text
+# ... (rest of the code below this line) ...
+
