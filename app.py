@@ -76,6 +76,7 @@ if "current_theme" not in st.session_state:
 def apply_theme(theme):
     # Sakura pink color used for regression toggle
     sakura_pink = "#ffb7c5"
+    # Use f-string and double braces for literal CSS braces
     st.markdown(f"""
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -84,7 +85,7 @@ def apply_theme(theme):
     div[data-testid="stSidebarNav"] a {{ color:{theme["nav_link_color"]} !important; border-radius:8px; padding:10px; }}
     div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.06) !important; transform: translateX(6px); transition: all .18s; }}
     h1,h2,h3,h4,h5,h6 {{ color:{theme["title_color"]}; text-shadow: 0 0 10px {theme["primary_color"]}20; font-family: 'Playfair Display', serif; }}
-    .stButton button {{ background: {theme["button_gradient"]} !important; color:{theme["button_text"]} !important; border-radius:12px; padding:0.55rem 1rem; font-weight:700; box-shadow: 0 8px 20px rgba(0,0,0,0.45); }}
+    .stButton button {{ background: {theme["button_gradient"]} !important; color:{theme["button_text"]} !important; border-radius:12px; padding:0.55rem 1rem; font-weight:700; box-shadow: 0 8px 20px rgba(0,0,0,0.35); }}
     .stButton button:hover {{ transform: scale(1.02); box-shadow: 0 12px 30px {theme["primary_color"]}40; }}
     .legend {{ background: rgba(0,0,0,0.4); border-radius:12px; padding:10px; color:{theme["text_color"]}; font-size:14px; margin-top:15px; border: 1px solid {theme["primary_color"]}50; }}
     .header-glow {{ position:absolute; right:20px; top:12px; width:78px; height:78px; opacity:0.95; animation: shimmer 8s linear infinite; }}
@@ -102,25 +103,23 @@ def apply_theme(theme):
     div[data-testid="stSelectbox"] div[data-testid="stInputContainer"] {{ background-color: rgba(255,255,255,0.08); border-radius:8px; border:1px solid {theme["primary_color"]}30; }}
     div[data-testid="stSelectbox"] div[data-testid="stInputContainer"] div {{ color:{theme["text_color"]}; }}
 
-    /* Slider */
-    .stSlider > div > div > div:nth-child(1) {{ background: {theme["primary_color"]}40; }} /* Track background */
-    .stSlider > div > div > div:nth-child(2) {{ background: {theme["primary_color"]}; }} /* Progress bar */
-    .stSlider > div > div > div:nth-child(3) {{ background: {theme["primary_color"]}; border: 1px solid {theme["secondary_color"]}; }} /* Thumb */
+    /* Slider styling */
+    .stSlider > div > div > div:nth-child(1) {{ background: {theme["primary_color"]}40; }}
+    .stSlider > div > div > div:nth-child(2) {{ background: {theme["primary_color"]}; }}
+    .stSlider > div > div > div:nth-child(3) {{ background: {theme["primary_color"]}; border: 1px solid {theme["secondary_color"]}; }}
     .stSlider label p {{ color:{theme["secondary_color"]}; }}
 
     /* Radio button */
     div[data-testid="stRadio"] label p {{ color:{theme["secondary_color"]}; }}
 
-    /* Custom checkbox-as-toggle styling (to render a compact toggle instead of long radio) */
+    /* Custom checkbox-as-toggle styling (compact toggle) */
     div[data-testid="stCheckbox"] > div > label {{ display:inline-flex; align-items:center; gap:10px; cursor:pointer; }}
-    /* Hide the native checkbox input visually but keep it accessible */
     div[data-testid="stCheckbox"] input[type="checkbox"] {{
         height: 0;
         width: 0;
         opacity: 0;
         position: absolute;
     }}
-    /* Create a rounded switch next to where Streamlit renders the label text */
     div[data-testid="stCheckbox"] > div > label::before {{
         content: "";
         display: inline-block;
@@ -143,7 +142,6 @@ def apply_theme(theme):
         transition: transform .25s ease;
         box-shadow: 0 2px 6px rgba(0,0,0,0.25);
     }}
-    /* When checked, change background to sakura pink and move knob */
     div[data-testid="stCheckbox"] input[type="checkbox"]:checked + label::before {{
         background: {sakura_pink};
         box-shadow: inset 0 -4px 8px rgba(0,0,0,0.06);
@@ -151,8 +149,6 @@ def apply_theme(theme):
     div[data-testid="stCheckbox"] input[type="checkbox"]:checked + label::after {{
         transform: translateX(26px);
     }}
-
-    /* Small tweaks to make the toggle compact */
     div[data-testid="stCheckbox"] > div > label p {{ margin:0; color:{theme["secondary_color"]}; font-weight:600; }}
     </style>
     """, unsafe_allow_html=True)
@@ -378,7 +374,7 @@ elif selected == "🤖 Modeling":
         st.markdown("Use the compact toggle to switch between Classification and Regression.")
 
         # Render a compact checkbox that is styled as a rounded switch through CSS
-        is_regression = st.checkbox("Regression", value=st.session_state.get("is_regression_toggle", False), key="is_regression_toggle", help="Toggle ON for Regression (predict Nitrogen value), OFF for Classification (predict Fertility Level).")
+        is_regression = st.checkbox("Regression", value=st.session_state.get("is_regression_toggle", False), key="is_regression_toggle", help="Toggle ON for Regression (predict Nitrogen value), OFF for Classification")
         # Update session state and theme when changed
         desired_mode = "Regression" if is_regression else "Classification"
         if desired_mode != st.session_state["task_mode"]:
@@ -593,7 +589,7 @@ elif selected == "🌿 Insights":
 
     st.markdown("---")
     st.subheader("About the System")
-    st.write("This application helps analyze soil health by using Random Forest models to classify fertility (Low/Moderate/High) or predict Nitrogen levels. Upload clean soil analysis datasets and use the Modeling tab to train and evaluate models. Visualization provides quick insight into distributions and correlations.")
+    st.write("This application helps analyze soil health by using Random Forest models to classify fertility (Low/Moderate/High) or predict Nitrogen levels. Upload clean soil analysis datasets and use the Modeling tab to train a model.")
     st.markdown("If you want to add more team members, update the `members` list inside the `Insights` branch in app.py.")
 
 # ----------------- Footer -----------------
