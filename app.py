@@ -4,27 +4,29 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_option_menu import option_menu
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import accuracy_score, classification_report, mean_squared_error, r2_score, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report, mean_squared_error, r2_score, confusion_matrix, mean_absolute_error
 from io import BytesIO
 import joblib
 import time
+import base64
+from PIL import Image
+import io as sysio
 
 st.set_page_config(
-    page_title="🌱 Soil Health ML App",
+    page_title="Machine Learning-Driven Soil Analysis for Sustainable Agriculture System",
     layout="wide",
     page_icon="🌿"
 )
 
-# ----------------- THEME SETTINGS (Dynamic) -----------------
-# Define themes
+# ----------------- THEMES -----------------
 theme_classification = {
     "background_main": "linear-gradient(120deg, #0f2c2c 0%, #1a4141 40%, #0e2a2a 100%)",
-    "sidebar_bg": "rgba(15, 30, 30, 0.9)",
-    "primary_color": "#81c784", # Green for accents
-    "secondary_color": "#a5d6a7", # Lighter green for text
+    "sidebar_bg": "rgba(15, 30, 30, 0.95)",
+    "primary_color": "#81c784",
+    "secondary_color": "#a5d6a7",
     "button_gradient": "linear-gradient(90deg, #66bb6a, #4caf50)",
     "button_text": "#0c1d1d",
     "header_glow_color_1": "#81c784",
@@ -44,131 +46,173 @@ theme_classification = {
     "title_color": "#a5d6a7",
 }
 
-theme_regression = {
-    "background_main": "linear-gradient(120deg, #3d2d38 0%, #5e4a55 40%, #3a2b37 100%)",
-    "sidebar_bg": "rgba(40, 30, 38, 0.9)",
-    "primary_color": "#f06292", # Pink for accents
-    "secondary_color": "#f8bbd0", # Lighter pink for text
-    "button_gradient": "linear-gradient(90deg, #ec407a, #d81b60)",
-    "button_text": "#2e1c27",
-    "header_glow_color_1": "#f06292",
-    "header_glow_color_2": "#d81b60",
-    "menu_icon_color": "#f06292",
-    "nav_link_color": "#ffe0e7",
-    "nav_link_selected_bg": "#d81b60",
-    "info_bg": "#422137",
-    "info_border": "#f06292",
-    "success_bg": "#5c2e4f",
-    "success_border": "#f06292",
-    "warning_bg": "#5c502e",
-    "warning_border": "#dcd380",
-    "error_bg": "#5c2e2e",
-    "error_border": "#ef9a9a",
-    "text_color": "#ffe0e7",
-    "title_color": "#f8bbd0",
+theme_sakura = {
+    "background_main": "linear-gradient(120deg, #2b062b 0%, #3b0a3b 50%, #501347 100%)",
+    "sidebar_bg": "linear-gradient(180deg, rgba(30,8,30,0.95), rgba(45,10,45,0.95))",
+    "primary_color": "#ff8aa2",
+    "secondary_color": "#ffc1d3",
+    "button_gradient": "linear-gradient(90deg, #ff8aa2, #ff3b70)",
+    "button_text": "#1f0f16",
+    "header_glow_color_1": "#ff93b0",
+    "header_glow_color_2": "#ff3b70",
+    "menu_icon_color": "#ff93b0",
+    "nav_link_color": "#ffd6e0",
+    "nav_link_selected_bg": "#ff3b70",
+    "info_bg": "#40132a",
+    "info_border": "#ff93b0",
+    "success_bg": "#3a1b2a",
+    "success_border": "#ff93b0",
+    "warning_bg": "#3b2530",
+    "warning_border": "#ffb3b3",
+    "error_bg": "#3a1a22",
+    "error_border": "#ff9aa3",
+    "text_color": "#ffeef8",
+    "title_color": "#ffd6e0",
 }
 
-# Session state for current theme
+# Session state defaults
 if "current_theme" not in st.session_state:
-    st.session_state["current_theme"] = theme_classification # Default
+    st.session_state["current_theme"] = theme_classification
+if "df" not in st.session_state:
+    st.session_state["df"] = None
+if "results" not in st.session_state:
+    st.session_state["results"] = None
+if "model" not in st.session_state:
+    st.session_state["model"] = None
+if "scaler" not in st.session_state:
+    st.session_state["scaler"] = None
+if "task_mode" not in st.session_state:
+    st.session_state["task_mode"] = "Classification"  # default
+if "trained_on_features" not in st.session_state:
+    st.session_state["trained_on_features"] = None
+# profile images stored in session as base64
+if "profile_andre" not in st.session_state:
+    st.session_state["profile_andre"] = None
+if "profile_rica" not in st.session_state:
+    st.session_state["profile_rica"] = None
 
-# Function to apply theme
+# ----------------- THEME APPLIER + BACKGROUND -----------------
 def apply_theme(theme):
-    # Sakura pink color used for regression toggle
-    sakura_pink = "#ffb7c5"
-    # Use f-string and double braces for literal CSS braces
-    st.markdown(f"""
+    css = f"""
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
     <style>
-    .stApp {{ font-family: 'Montserrat', sans-serif; color:{theme["text_color"]}; min-height:100vh; background: {theme["background_main"]}; background-attachment: fixed; }}
-    section[data-testid="stSidebar"] {{ background: {theme["sidebar_bg"]} !important; border-radius:12px; padding:18px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }}
-    div[data-testid="stSidebarNav"] a {{ color:{theme["nav_link_color"]} !important; border-radius:8px; padding:10px; }}
-    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.06) !important; transform: translateX(6px); transition: all .18s; }}
-    h1,h2,h3,h4,h5,h6 {{ color:{theme["title_color"]}; text-shadow: 0 0 10px {theme["primary_color"]}20; font-family: 'Playfair Display', serif; }}
-    .stButton button {{ background: {theme["button_gradient"]} !important; color:{theme["button_text"]} !important; border-radius:12px; padding:0.55rem 1rem; font-weight:700; box-shadow: 0 8px 20px rgba(0,0,0,0.35); }}
-    .stButton button:hover {{ transform: scale(1.02); box-shadow: 0 12px 30px {theme["primary_color"]}40; }}
-    .legend {{ background: rgba(0,0,0,0.4); border-radius:12px; padding:10px; color:{theme["text_color"]}; font-size:14px; margin-top:15px; border: 1px solid {theme["primary_color"]}50; }}
-    .header-glow {{ position:absolute; right:20px; top:12px; width:78px; height:78px; opacity:0.95; animation: shimmer 8s linear infinite; }}
-    @keyframes shimmer {{ 0% {{ transform: rotate(0deg) translateY(0) }} 50% {{ transform: rotate(6deg) translateY(-10px) }} 100% {{ transform: rotate(0deg) translateY(0) }} }}
-    .footer {{ text-align:center; color:{theme["secondary_color"]}; font-size:13px; padding:10px; margin-top:18px; }}
-
-    /* Info/Success/Warning/Error boxes */
-    div[data-testid="stInfo"] {{ background-color: {theme["info_bg"]}; border-left: 5px solid {theme["info_border"]}; color: {theme["text_color"]}; }}
-    div[data-testid="stSuccess"] {{ background-color: {theme["success_bg"]}; border-left: 5px solid {theme["success_border"]}; color: {theme["text_color"]}; }}
-    div[data-testid="stWarning"] {{ background-color: {theme["warning_bg"]}; border-left: 5px solid {theme["warning_border"]}; color: {theme["text_color"]}; }}
-    div[data-testid="stError"] {{ background-color: {theme["error_bg"]}; border-left: 5px solid {theme["error_border"]}; color: {theme["text_color"]}; }}
-
-    /* Selectbox */
-    div[data-testid="stSelectbox"] div[data-testid="stMarkdownContainer"] p {{ color:{theme["secondary_color"]}; }}
-    div[data-testid="stSelectbox"] div[data-testid="stInputContainer"] {{ background-color: rgba(255,255,255,0.08); border-radius:8px; border:1px solid {theme["primary_color"]}30; }}
-    div[data-testid="stSelectbox"] div[data-testid="stInputContainer"] div {{ color:{theme["text_color"]}; }}
-
-    /* Slider styling */
-    .stSlider > div > div > div:nth-child(1) {{ background: {theme["primary_color"]}40; }}
-    .stSlider > div > div > div:nth-child(2) {{ background: {theme["primary_color"]}; }}
-    .stSlider > div > div > div:nth-child(3) {{ background: {theme["primary_color"]}; border: 1px solid {theme["secondary_color"]}; }}
-    .stSlider label p {{ color:{theme["secondary_color"]}; }}
-
-    /* Radio button */
-    div[data-testid="stRadio"] label p {{ color:{theme["secondary_color"]}; }}
-
-    /* Custom checkbox-as-toggle styling (compact toggle) */
-    div[data-testid="stCheckbox"] > div > label {{ display:inline-flex; align-items:center; gap:10px; cursor:pointer; }}
-    div[data-testid="stCheckbox"] input[type="checkbox"] {{
-        height: 0;
-        width: 0;
-        opacity: 0;
-        position: absolute;
+    /* Main app + background decorative shapes */
+    .stApp {{
+      font-family: 'Montserrat', sans-serif;
+      color:{theme['text_color']};
+      min-height:100vh;
+      background: {theme['background_main']};
+      background-attachment: fixed;
+      position: relative;
+      overflow: hidden;
     }}
-    div[data-testid="stCheckbox"] > div > label::before {{
-        content: "";
-        display: inline-block;
-        width: 56px;
-        height: 30px;
-        background: #cfcfcf;
-        border-radius: 30px;
-        position: relative;
-        transition: background .25s ease;
+    /* soft decorative blobs in background */
+    .bg-decor {{
+      position: absolute;
+      right: -8%;
+      top: -12%;
+      width: 55vmax;
+      height: 55vmax;
+      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.03), transparent 10%),
+                  radial-gradient(circle at 80% 80%, rgba(255,255,255,0.02), transparent 25%);
+      transform: rotate(12deg) scale(1.1);
+      filter: blur(36px);
+      z-index: 0;
+      pointer-events: none;
     }}
-    div[data-testid="stCheckbox"] > div > label::after {{
-        content: "";
-        display: inline-block;
-        width: 22px;
-        height: 22px;
-        background: #fff;
-        border-radius: 50%;
-        position: relative;
-        left: -48px;
-        transition: transform .25s ease;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    section[data-testid="stSidebar"] {{
+      background: {theme['sidebar_bg']} !important;
+      border-radius:12px;
+      padding:18px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+      z-index: 2;
     }}
-    div[data-testid="stCheckbox"] input[type="checkbox"]:checked + label::before {{
-        background: {sakura_pink};
-        box-shadow: inset 0 -4px 8px rgba(0,0,0,0.06);
+    /* modernized header card in sidebar */
+    .sidebar-header {{
+      padding: 12px;
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      margin-bottom: 12px;
+      border: 1px solid rgba(255,255,255,0.03);
     }}
-    div[data-testid="stCheckbox"] input[type="checkbox"]:checked + label::after {{
-        transform: translateX(26px);
+    .sidebar-title {{ font-family: 'Playfair Display', serif; color:{theme['title_color']}; margin:0; }}
+    .sidebar-sub {{ font-size:12px; color:{theme['secondary_color']}; margin-top:6px; opacity:0.95; }}
+    /* make the menu links a bit more spaced and larger hit area */
+    div[data-testid="stSidebarNav"] a {{
+      color:{theme['nav_link_color']} !important;
+      border-radius:8px;
+      padding:10px 12px!important;
+      margin-bottom:6px!important;
+      display:block!important;
+      transition: all .12s;
+      font-size:15px!important;
     }}
-    div[data-testid="stCheckbox"] > div > label p {{ margin:0; color:{theme["secondary_color"]}; font-weight:600; }}
+    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.03) !important; transform: translateX(6px); }}
+    div[data-testid="stSidebarNav"] a[aria-current="page"] {{ background:{theme['nav_link_selected_bg']}!important; color:#0b0b0b!important; box-shadow:0 6px 16px rgba(0,0,0,0.25); }}
+    h1,h2,h3,h4,h5,h6 {{ color:{theme['title_color']}; font-family: 'Playfair Display', serif; z-index: 3; }}
+    .stButton button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; border-radius:10px; padding:0.45rem 0.9rem; font-weight:700; }}
+    .stDownloadButton>button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; }}
+    .profile-circle {{
+      width:120px;
+      height:120px;
+      border-radius:50%;
+      display:inline-block;
+      vertical-align: middle;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 18px rgba(0,0,0,0.35);
+      background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(0,0,0,0.04));
+      border: 4px solid rgba(255,255,255,0.04);
+      overflow:hidden;
+      text-align:center;
+      line-height:120px;
+    }}
+    .profile-holo {{
+      background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+      padding:6px;
+      border-radius:50%;
+      display:inline-block;
+    }}
+    .profile-name {{ margin-top:8px; font-weight:700; color:{theme['secondary_color']}; }}
+    .uploader-hint {{ font-size:12px; color:{theme['text_color']}; opacity:0.7; }}
+    /* small form tweaks */
+    div[data-testid="stToolbar"] {{ background: transparent; }}
+    /* reduce verbose text in option_menu button (we removed instructions by default) */
     </style>
-    """, unsafe_allow_html=True)
+    """
+    st.markdown(css, unsafe_allow_html=True)
+    # decorative blobs (single element)
+    st.markdown('<div class="bg-decor"></div>', unsafe_allow_html=True)
 
-# Apply the initial theme
 apply_theme(st.session_state["current_theme"])
 
-# ----------------- SIDEBAR MENU -----------------
+# ----------------- SIDEBAR (redesigned) -----------------
 with st.sidebar:
+    st.markdown(
+        f"""
+        <div class="sidebar-header">
+          <h2 class="sidebar-title">🌱 Soil Health System</h2>
+          <div class="sidebar-sub">ML-Driven Soil Analysis</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    st.write("---")
+
     selected = option_menu(
-        "🌱 Soil Health App",
-        ["📂 Upload Data", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights"],
-        icons=["cloud-upload", "bar-chart", "robot", "graph-up", "lightbulb"],
+        None,
+        ["🏠 Home", "📊 Visualization", "🤖 Modeling", "📈 Results", "🌿 Insights", "👤 About"],
+        icons=["house", "bar-chart", "robot", "graph-up", "lightbulb", "person-circle"],
         menu_icon="list",
         default_index=0,
-        styles={"container": {"padding": "5!important", "background-color": st.session_state["current_theme"]["sidebar_bg"]},
-                "icon": {"color": st.session_state["current_theme"]["menu_icon_color"], "font-size": "20px"},
-                "nav-link": {"color": st.session_state["current_theme"]["nav_link_color"], "font-size": "16px"},
-                "nav-link-selected": {"background-color": st.session_state["current_theme"]["nav_link_selected_bg"]},}
+        styles={
+            "container": {"padding": "0!important", "background-color": "transparent"},
+            "icon": {"color": st.session_state["current_theme"]["menu_icon_color"], "font-size": "18px"},
+            "nav-link": {"font-size": "15px", "text-align": "left", "margin": "0px"},
+            "nav-link-selected": {"background-color": st.session_state["current_theme"]["nav_link_selected_bg"]},
+        }
     )
+    st.write("---")
+    # minimal footer text
+    st.markdown(f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>", unsafe_allow_html=True)
 
 # ----------------- COMMON SETTINGS -----------------
 column_mapping = {
@@ -180,20 +224,6 @@ column_mapping = {
     'Organic Matter': ['Organic Matter', 'OM', 'oc']
 }
 required_columns = list(column_mapping.keys())
-
-if "df" not in st.session_state:
-    st.session_state["df"] = None
-if "results" not in st.session_state:
-    st.session_state["results"] = None
-if "model" not in st.session_state:
-    st.session_state["model"] = None
-if "y_train_quantiles" not in st.session_state:
-    st.session_state["y_train_quantiles"] = None
-if "task_mode" not in st.session_state:
-    st.session_state["task_mode"] = "Classification" # Default mode
-# Add a boolean toggle key for rendering / state
-if "is_regression_toggle" not in st.session_state:
-    st.session_state["is_regression_toggle"] = False if st.session_state["task_mode"] == "Classification" else True
 
 def safe_to_numeric_columns(df, cols):
     numeric_found = []
@@ -212,37 +242,79 @@ def download_df_button(df, filename="final_preprocessed_soil_dataset.csv", label
 def create_fertility_label(df, col="Nitrogen", q=3):
     labels = ['Low', 'Moderate', 'High']
     try:
-        # Use qcut for more balanced bins if possible
         fert = pd.qcut(df[col], q=q, labels=labels, duplicates='drop')
-        if fert.nunique() < 3: # Fallback if qcut creates fewer than 3 unique bins
+        if fert.nunique() < 3:
             fert = pd.cut(df[col], bins=3, labels=labels)
     except Exception:
-        # Fallback to cut if qcut fails entirely (e.g., all values are same)
         fert = pd.cut(df[col], bins=3, labels=labels, include_lowest=True)
     return fert.astype(str)
 
 def interpret_label(label):
     l = str(label).lower()
-    if l in ["high", "good", "healthy", "3", "2.0"]: # Ensure 2.0 is covered if float values
+    if l in ["high", "good", "healthy", "3", "2.0"]:
         return ("Good", "green", "✅ Nutrients are balanced. Ideal for most crops.")
     if l in ["moderate", "medium", "2", "1.0"]:
         return ("Moderate", "orange", "⚠️ Some nutrient imbalance. Consider minor adjustments.")
     return ("Poor", "red", "🚫 Deficient or problematic — take corrective action.")
 
-# ----------------- UPLOAD DATA -----------------
-if selected == "📂 Upload Data":
-    st.title("📂 Upload Soil Data")
-    st.markdown("Upload your soil analysis datasets here (.csv or .xlsx). The app will automatically clean and preprocess the data for analysis.")
-    
-    uploaded_files = st.file_uploader("Select multiple datasets", type=['csv', 'xlsx'], accept_multiple_files=True, key="uploader")
-    
+# ----------------- PROFILE / AVATAR HELPERS -----------------
+def pil_to_base64(img: Image.Image, fmt="PNG"):
+    buf = sysio.BytesIO()
+    img.save(buf, format=fmt)
+    b = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return b
+
+def render_profile(name, session_key, upload_key):
+    st.markdown("<div style='display:flex;align-items:center;gap:12px;'>", unsafe_allow_html=True)
+    # show circle (either placeholder holo or uploaded image)
+    img_b64 = st.session_state.get(session_key)
+    if img_b64:
+        html = f"""
+        <div class='profile-holo'>
+          <div class='profile-circle'>
+            <img src='data:image/png;base64,{img_b64}' style='width:120px;height:120px;object-fit:cover;border-radius:50%;display:block;'/>
+          </div>
+        </div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        placeholder = f"""
+        <div class='profile-holo'>
+          <div class='profile-circle' style='background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));'>
+            <div style='font-size:36px;line-height:120px;opacity:0.65;'>👤</div>
+          </div>
+        </div>
+        """
+        st.markdown(placeholder, unsafe_allow_html=True)
+
+    st.markdown(f"<div style='display:block'><div class='profile-name'>{name}</div><div class='uploader-hint'>Upload an image to replace placeholder</div></div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # uploader underneath
+    file = st.file_uploader(f"Choose {name} profile image (optional)", type=['png','jpg','jpeg'], key=upload_key)
+    if file:
+        try:
+            img = Image.open(file).convert("RGB")
+            img_b64_new = pil_to_base64(img)
+            st.session_state[session_key] = img_b64_new
+            st.success(f"{name} profile updated.")
+        except Exception as e:
+            st.error(f"Couldn't read the image: {e}")
+
+# ----------------- Reusable upload & preprocess function (used on Home) -----------------
+def upload_and_preprocess_widget():
+    st.markdown("### 📂 Upload Soil Data")
+    st.markdown("Upload one or more soil analysis files (.csv or .xlsx). The app will attempt to standardize column names and auto-preprocess numeric columns.")
+    uploaded_files = st.file_uploader("Select datasets", type=['csv', 'xlsx'], accept_multiple_files=True)
+
     if st.session_state["df"] is not None and not uploaded_files:
-        st.info(f"✅ A preprocessed dataset is already loaded ({st.session_state['df'].shape[0]} rows, {st.session_state['df'].shape[1]} cols).")
+        st.success(f"✅ Loaded preprocessed dataset ({st.session_state['df'].shape[0]} rows, {st.session_state['df'].shape[1]} cols).")
         st.dataframe(st.session_state["df"].head())
-        if st.button("🔁 Clear current dataset and upload new ones", help="This will remove the current dataset and allow you to upload new files."):
+        if st.button("🔁 Clear current dataset"):
             st.session_state["df"] = None
-            st.session_state["results"] = None # Clear results if data changes
-            st.session_state["model"] = None # Clear model if data changes
+            st.session_state["results"] = None
+            st.session_state["model"] = None
+            st.session_state["scaler"] = None
             st.experimental_rerun()
 
     cleaned_dfs = []
@@ -262,335 +334,451 @@ if selected == "📂 Upload Data":
                 safe_to_numeric_columns(df_file, cols_to_keep)
                 df_file.drop_duplicates(inplace=True)
                 cleaned_dfs.append(df_file)
-                st.success(f"✅ Cleaned: **{file.name}** ({df_file.shape[0]} rows, kept cols: {', '.join(cols_to_keep)})")
+                st.success(f"✅ Cleaned {file.name} — kept: {', '.join(cols_to_keep)} ({df_file.shape[0]} rows)")
             except Exception as e:
-                st.warning(f"⚠️ Skipped **{file.name}**: {e}")
-        
+                st.warning(f"⚠️ Skipped {file.name}: {e}")
+
         if cleaned_dfs:
             df = pd.concat(cleaned_dfs, ignore_index=True, sort=False)
             df.replace(r'^\s*$', np.nan, regex=True, inplace=True)
             safe_to_numeric_columns(df, required_columns)
-            
+
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             if len(numeric_cols) > 0:
                 medians = df[numeric_cols].median()
                 df[numeric_cols] = df[numeric_cols].fillna(medians)
-            
+
             cat_cols = df.select_dtypes(exclude=[np.number]).columns
             for c in cat_cols:
                 try:
                     if df[c].isnull().sum() > 0:
                         df[c].fillna(df[c].mode().iloc[0], inplace=True)
                 except Exception:
-                    # Fallback for categories if mode fails (e.g., all unique)
                     df[c].fillna(method='ffill', inplace=True)
-            
+
             df.dropna(how='all', inplace=True)
             st.session_state["df"] = df
-            
-            st.subheader("🔗 Final Merged, Cleaned & Preprocessed Dataset Preview")
-            st.write(f"**Rows:** {df.shape[0]} — **Columns:** {df.shape[1]}")
+            st.success("✨ Dataset preprocessed and stored in session.")
+            st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
-            download_df_button(df, filename="final_preprocessed_soil_dataset.csv", label="⬇️ Download Cleaned & Preprocessed Data")
-            st.success("✨ Auto preprocessing applied and dataset saved for further analysis.")
-            st.info("💡 You can now proceed to 'Visualization' or 'Modeling' tabs.")
+            download_df_button(df)
         else:
-            st.error("No valid datasets could be processed. Please check file formats and column names.")
+            st.error("No valid sheets processed. Check file formats and column headers.")
+
+# ----------------- HOME (with lighter toggle) -----------------
+if selected == "🏠 Home":
+    st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
+    st.markdown("<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>", unsafe_allow_html=True)
+    st.write("---")
+
+    # Use a light toggle (select slider) to switch task mode visually like a toggle
+    st.markdown("#### Mode")
+    new_mode = st.select_slider("", options=["Classification", "Regression"], value=st.session_state["task_mode"], key="home_mode_slider")
+    if new_mode != st.session_state["task_mode"]:
+        st.session_state["task_mode"] = new_mode
+        st.session_state["current_theme"] = theme_classification if new_mode == "Classification" else theme_sakura
+        apply_theme(st.session_state["current_theme"])
+
+    st.markdown(f"**Current Mode:** {st.session_state['task_mode']}")
+    st.write("---")
+
+    upload_and_preprocess_widget()
+
+    # Quick Modeling box (same as before, but placed on Home)
+    if st.session_state["df"] is not None:
+        df = st.session_state["df"]
+        st.markdown("### Quick Modeling (one-click)")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            quick_mode = st.radio("Select quick modeling mode:", ["Classification", "Regression"],
+                                  index=0 if st.session_state["task_mode"] == "Classification" else 1, key="quick_mode_radio_home")
+        with col2:
+            if quick_mode != st.session_state["task_mode"]:
+                st.session_state["task_mode"] = quick_mode
+                st.session_state["current_theme"] = theme_classification if quick_mode == "Classification" else theme_sakura
+                apply_theme(st.session_state["current_theme"])
+
+            if st.button("▶️ Start Quick Model"):
+                # Validate presence of Nitrogen
+                if 'Nitrogen' not in df.columns:
+                    st.error("The 'Nitrogen' column is required for modeling. Please ensure your uploaded data includes Nitrogen.")
+                else:
+                    # Prepare X, y
+                    df_local = df.copy()
+                    if quick_mode == "Classification":
+                        df_local['Fertility_Level'] = create_fertility_label(df_local, col='Nitrogen', q=3)
+                        y = df_local['Fertility_Level']
+                    else:
+                        y = df_local['Nitrogen']
+
+                    X = df_local.select_dtypes(include=[np.number]).drop(columns=['Nitrogen'], errors='ignore')
+                    if X.shape[1] == 0:
+                        st.error("No numeric features available for quick modeling after dropping the target.")
+                    else:
+                        scaler = MinMaxScaler()
+                        X_scaled = scaler.fit_transform(X)
+                        X_df = pd.DataFrame(X_scaled, columns=X.columns)
+                        X_train, X_test, y_train, y_test = train_test_split(X_df, y, test_size=0.2, random_state=42)
+
+                        if quick_mode == "Classification":
+                            model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+                        else:
+                            model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+
+                        with st.spinner("Training quick Random Forest..."):
+                            model.fit(X_train, y_train)
+                            y_pred = model.predict(X_test)
+
+                        # Save into session
+                        st.session_state["model"] = model
+                        st.session_state["scaler"] = scaler
+                        st.session_state["results"] = {
+                            "task": quick_mode,
+                            "y_test": y_test.tolist(),
+                            "y_pred": np.array(y_pred).tolist(),
+                            "model_name": f"Random Forest {quick_mode} Model (Quick)",
+                            "X_columns": X.columns.tolist(),
+                            "feature_importances": model.feature_importances_.tolist()
+                        }
+                        st.session_state["trained_on_features"] = X.columns.tolist()
+                        st.success("✅ Quick model trained. Navigate to 'Results' to inspect performance.")
+
+    # Home-level compact results indicator (if model exists)
+    if st.session_state.get("results"):
+        st.write("---")
+        st.markdown("### Model Indicator")
+        r = st.session_state["results"]
+        task = r.get("task", st.session_state["task_mode"])
+        y_test = np.array(r.get("y_test", []))
+        y_pred = np.array(r.get("y_pred", []))
+        col1, col2, col3 = st.columns(3)
+        if task == "Classification" and len(y_test) > 0:
+            try:
+                acc = accuracy_score(y_test, y_pred)
+                col1.metric("Accuracy", f"{acc:.3f}")
+            except Exception:
+                col1.write("Accuracy N/A")
+            try:
+                cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
+                fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis)
+                fig_cm.update_layout(height=220, template="plotly_dark")
+                col2.plotly_chart(fig_cm, use_container_width=True)
+            except Exception:
+                col2.write("Confusion matrix not available")
+            fi = r.get("feature_importances", [])
+            feat = r.get("X_columns", [])
+            if fi and feat:
+                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+                top = df_fi.head(3)
+                col3.markdown("**Top features**")
+                for i, row in top.iterrows():
+                    col3.write(f"- {row['feature']} ({row['importance']:.2f})")
+        elif task == "Regression" and len(y_test) > 0:
+            mse = mean_squared_error(y_test, y_pred)
+            rmse = np.sqrt(mse)
+            col1.metric("RMSE", f"{rmse:.3f}")
+            col2.write("Sample predictions")
+            sample_df = pd.DataFrame({"actual": y_test[:6], "pred": y_pred[:6]})
+            col2.dataframe(sample_df)
+            fi = r.get("feature_importances", [])
+            feat = r.get("X_columns", [])
+            if fi and feat:
+                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+                top = df_fi.head(3)
+                col3.markdown("**Top features**")
+                for i, row in top.iterrows():
+                    col3.write(f"- {row['feature']} ({row['importance']:.2f})")
 
 # ----------------- VISUALIZATION -----------------
 elif selected == "📊 Visualization":
-    st.title("📊 Soil Data Visualization")
-    st.markdown("Explore the distributions and relationships within your soil data.")
-
-    if "df" in st.session_state and st.session_state["df"] is not None:
+    st.title("📊 Data Visualization")
+    st.markdown("Explore distributions, correlations, and relationships in your preprocessed data.")
+    if st.session_state["df"] is None:
+        st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
+    else:
         df = st.session_state["df"]
-        
-        # Ensure 'Nitrogen' is available for fertility label creation in plots
         if 'Nitrogen' in df.columns and 'Fertility_Level' not in df.columns:
             df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
 
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
         if not numeric_cols:
-            st.warning("No numeric columns available for plotting. Please check your data.")
+            st.warning("No numeric columns available for visualization.")
         else:
-            st.subheader("Distribution of Soil Parameters")
+            st.subheader("Distributions")
             col1, col2 = st.columns(2)
             with col1:
-                feature_dist = st.selectbox("Select a numeric feature for Distribution", numeric_cols, key="dist_feature")
-            
-            if feature_dist:
-                fig_hist = px.histogram(df, x=feature_dist, nbins=30, marginal="box",
-                                        color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]],
-                                        title=f"Distribution of {feature_dist}")
-                fig_hist.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_hist, use_container_width=True)
-            
-            st.subheader("🌐 Feature Correlation Heatmap")
-            corr = df[numeric_cols].corr() # Only numeric columns for correlation
-            fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis,
-                                 title="Correlation Matrix of Soil Parameters")
-            fig_corr.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                   coloraxis_colorbar=dict(title="Correlation"))
+                dist_feature = st.selectbox("Distribution feature", numeric_cols, key="vis_dist_feature")
+                bins = st.slider("Bins", 10, 80, 30, key="vis_bins")
+            with col2:
+                scatter_x = st.selectbox("Scatter X", numeric_cols, index=0, key="vis_scatter_x")
+                scatter_y = st.selectbox("Scatter Y", numeric_cols, index=1 if len(numeric_cols) > 1 else 0, key="vis_scatter_y")
+
+            fig_hist = px.histogram(df, x=dist_feature, nbins=bins, marginal="box",
+                                    title=f"Distribution of {dist_feature}",
+                                    color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
+            fig_hist.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+            st.subheader("Correlation Matrix")
+            corr = df[numeric_cols].corr()
+            fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Correlation Heatmap")
+            fig_corr.update_layout(template="plotly_dark")
             st.plotly_chart(fig_corr, use_container_width=True)
 
-            st.subheader("Scatter Plot: Feature Relationships")
-            col_x = st.selectbox("X-axis Feature", numeric_cols, index=0, key="scatter_x")
-            col_y = st.selectbox("Y-axis Feature", numeric_cols, index=1 if len(numeric_cols) > 1 else 0, key="scatter_y")
-            
-            if col_x and col_y:
-                fig_scatter = px.scatter(df, x=col_x, y=col_y,
-                                         color='Fertility_Level' if 'Fertility_Level' in df.columns else None,
-                                         color_discrete_map={'Low': 'red', 'Moderate': 'orange', 'High': 'green'},
-                                         title=f"{col_x} vs. {col_y}",
-                                         hover_data=df.columns)
-                fig_scatter.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_scatter, use_container_width=True)
+            st.subheader("Scatter with Fertility Level")
+            fig_scatter = px.scatter(df, x=scatter_x, y=scatter_y,
+                                     color='Fertility_Level' if 'Fertility_Level' in df.columns else None,
+                                     color_discrete_map={'Low': 'red', 'Moderate': 'orange', 'High': 'green'},
+                                     hover_data=df.columns, title=f"{scatter_x} vs {scatter_y}")
+            fig_scatter.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_scatter, use_container_width=True)
 
-            st.subheader("Box Plots for Outlier Detection")
-            box_feature = st.selectbox("Select a numeric feature for Box Plot", numeric_cols, key="box_feature")
-            if box_feature:
-                fig_box = px.box(df, y=box_feature,
-                                 color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]],
-                                 title=f"Box Plot of {box_feature}")
-                fig_box.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_box, use_container_width=True)
-
-    else:
-        st.info("Please upload and preprocess data first in the 'Upload Data' tab to enable visualizations.")
-
-# ----------------- MODELING (Random Forest only) -----------------
+# ----------------- MODELING -----------------
 elif selected == "🤖 Modeling":
-    st.title("🤖 Modeling & Prediction Using Random Forest")
-    st.markdown("Configure and train your Random Forest model for soil analysis.")
+    st.title("🤖 Modeling — Random Forest")
+    st.markdown("Fine tune hyperparameters and train Random Forest models for Classification or Regression.")
 
-    if "df" not in st.session_state or st.session_state["df"] is None:
-        st.info("Please upload data first in the 'Upload Data' tab.")
+    if st.session_state["df"] is None:
+        st.info("Please upload a dataset first in 'Home'.")
     else:
-        df = st.session_state["df"].copy() # Use a copy to avoid modifying original session state DF directly
-
-        # --- Mode Toggle (compact) ---
-        st.subheader("🎯 Select Prediction Task")
-        st.markdown("Use the compact toggle to switch between Classification and Regression.")
-
-        # Render a compact checkbox that is styled as a rounded switch through CSS
-        is_regression = st.checkbox("Regression", value=st.session_state.get("is_regression_toggle", False), key="is_regression_toggle", help="Toggle ON for Regression (predict Nitrogen value), OFF for Classification")
-        # Update session state and theme when changed
-        desired_mode = "Regression" if is_regression else "Classification"
-        if desired_mode != st.session_state["task_mode"]:
-            st.session_state["task_mode"] = desired_mode
-            st.session_state["current_theme"] = theme_regression if desired_mode == "Regression" else theme_classification
-            # Re-apply theme (CSS) immediately and rerun to ensure style/theme consistency
+        df = st.session_state["df"].copy()
+        st.subheader("Select Task")
+        task = st.radio("Choose modeling task:", ["Classification", "Regression"], index=0 if st.session_state["task_mode"] == "Classification" else 1)
+        if task != st.session_state["task_mode"]:
+            st.session_state["task_mode"] = task
+            st.session_state["current_theme"] = theme_classification if task == "Classification" else theme_sakura
             apply_theme(st.session_state["current_theme"])
-            st.experimental_rerun()
 
-        # Show current mode (small)
-        st.markdown(f"<p style='color:{st.session_state['current_theme']['secondary_color']}; font-size:1.0em;'>Current Mode: <strong>{st.session_state['task_mode']}</strong></p>", unsafe_allow_html=True)
-        
-        # Ensure 'Nitrogen' is available
+        st.markdown(f"Current Mode: **{st.session_state['task_mode']}**", unsafe_allow_html=True)
+
         if 'Nitrogen' not in df.columns:
-            st.error("❗ The 'Nitrogen' column is required for modeling (it's used as the target variable). Please ensure your dataset contains 'Nitrogen'.")
+            st.error("Missing 'Nitrogen' column required as target. Ensure your dataset contains 'Nitrogen'.")
             st.stop()
 
-        # Prepare target variable 'y'
+        # prepare target and features
         if st.session_state["task_mode"] == "Classification":
-            st.info("Model will predict **Soil Fertility Level** (Low, Moderate, High) based on Nitrogen levels.")
             df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
             y = df['Fertility_Level']
-            X = df.drop(columns=['Nitrogen', 'Fertility_Level'], errors='ignore')
-        else: # Regression
-            st.info("Model will predict the **exact Nitrogen level** in the soil.")
+        else:
             y = df['Nitrogen']
-            X = df.drop(columns=['Nitrogen', 'Fertility_Level'], errors='ignore') # Ensure Fertility_Level is dropped if it was created
-        
-        # Select features
-        available_features = X.select_dtypes(include=[np.number]).columns.tolist()
-        if not available_features:
-            st.error("No numeric features available after dropping the target. Please check your dataset.")
-            st.stop()
-        
-        selected_features = st.multiselect(
-            "Select features (input variables) for the model:",
-            options=available_features,
-            default=available_features,
-            help="Choose the soil parameters you want the model to use for prediction."
-        )
+
+        numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
+        # drop Nitrogen from features
+        if 'Nitrogen' in numeric_features:
+            numeric_features.remove('Nitrogen')
+
+        st.subheader("Feature Selection")
+        st.markdown("Select numeric features to include in the model.")
+        selected_features = st.multiselect("Features", options=numeric_features, default=numeric_features)
 
         if not selected_features:
-            st.warning("Please select at least one feature to train the model.")
+            st.warning("Select at least one feature.")
             st.stop()
 
-        X = X[selected_features]
+        X = df[selected_features]
 
-        # --- Hyperparameters ---
-        st.subheader("⚙️ Random Forest Hyperparameters")
-        col_hp1, col_hp2 = st.columns(2)
-        with col_hp1:
-            n_estimators = st.slider("Number of Trees (n_estimators)", 50, 500, 100, step=50,
-                                     help="The number of decision trees in the forest.")
-        with col_hp2:
-            max_depth = st.slider("Max Depth (max_depth)", 2, 50, 10, step=1,
-                                  help="The maximum depth of each tree. Prevents overfitting.")
+        st.subheader("Hyperparameters")
+        col1, col2 = st.columns(2)
+        with col1:
+            n_estimators = st.slider("n_estimators", 50, 500, 150, step=50)
+        with col2:
+            max_depth = st.slider("max_depth", 2, 50, 12)
 
-        # Scaling and splitting
+        # scaling
         scaler = MinMaxScaler()
         X_scaled = scaler.fit_transform(X)
-        X = pd.DataFrame(X_scaled, columns=X.columns)
-        
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_scaled_df = pd.DataFrame(X_scaled, columns=selected_features)
 
-        if st.button(f"🚀 Train {st.session_state['task_mode']} Model", help="Click to start training the Random Forest model."):
-            with st.spinner(f"🧠 Training Random Forest ({st.session_state['task_mode']} mode)..."):
-                time.sleep(0.5) # Simulate training time
-                
+        # splitting
+        test_size = st.slider("Test set fraction", 10, 40, 20, step=5)
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled_df, y, test_size=test_size/100, random_state=42)
+
+        if st.button("🚀 Train Model"):
+            with st.spinner("Training Random Forest..."):
+                time.sleep(0.3)
                 if st.session_state["task_mode"] == "Classification":
                     model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1)
-                else: # Regression
+                else:
                     model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1)
-                
+
                 model.fit(X_train, y_train)
                 y_pred = model.predict(X_test)
 
+                # cross-validation summary
+                try:
+                    cv_scores = cross_val_score(model, X_scaled_df, y, cv=5, scoring='accuracy' if st.session_state["task_mode"] == "Classification" else 'r2')
+                    cv_summary = {"mean_cv": float(np.mean(cv_scores)), "std_cv": float(np.std(cv_scores))}
+                except Exception:
+                    cv_summary = None
+
+                st.session_state["model"] = model
+                st.session_state["scaler"] = scaler
                 st.session_state["results"] = {
                     "task": st.session_state["task_mode"],
                     "y_test": y_test.tolist(),
-                    "y_pred": y_pred.tolist(),
-                    "model_name": "Random Forest",
-                    "X_columns": X.columns.tolist(),
+                    "y_pred": np.array(y_pred).tolist(),
+                    "model_name": f"Random Forest {st.session_state['task_mode']} Model",
+                    "X_columns": selected_features,
                     "feature_importances": model.feature_importances_.tolist(),
-                    "feature_names": X.columns.tolist()
+                    "cv_summary": cv_summary
                 }
-                st.session_state["model"] = model
-                
-                if st.session_state["task_mode"] == "Regression":
-                    st.session_state["y_train_quantiles"] = df['Nitrogen'].quantile([0.33, 0.66]).tolist()
-                
-                st.success("✅ Random Forest training completed! Proceed to 📈 Results to view performance.")
-        
-        st.subheader("Make New Predictions (Optional)")
-        st.markdown("Enter values for new soil samples to get predictions from your trained model.")
-        if st.session_state["model"]:
-            # Display input fields for each feature the model was trained on
-            new_data_input = {}
-            for feature in st.session_state["results"]["X_columns"]:
-                new_data_input[feature] = st.number_input(f"Enter value for {feature}", value=0.0, format="%.2f", key=f"new_data_{feature}")
+                st.session_state["trained_on_features"] = selected_features
+                st.success("✅ Training completed. Go to 'Results' to inspect performance.")
 
-            if st.button("🔮 Predict New Sample", help="Get a prediction for the entered soil parameters."):
-                # Convert input to DataFrame, scale, and predict
-                input_df = pd.DataFrame([new_data_input])
-                
-                # IMPORTANT: Scale new data using the SAME scaler fitted on training data
-                temp_scaler = MinMaxScaler()
-                # Fit on original df's selected features to maintain consistent scaling ranges
-                temp_scaler.fit(df[st.session_state["results"]["X_columns"]]) 
-                input_scaled = temp_scaler.transform(input_df)
-                input_scaled_df = pd.DataFrame(input_scaled, columns=st.session_state["results"]["X_columns"])
-
-                new_prediction = st.session_state["model"].predict(input_scaled_df)
-                
-                st.subheader("Prediction for New Sample:")
+        st.markdown("### Predict a New Sample")
+        if st.session_state.get("model"):
+            new_inputs = {}
+            for f in selected_features:
+                new_inputs[f] = st.number_input(f"Value for {f}", value=float(np.median(df[f])) if f in df else 0.0, format="%.3f", key=f"input_{f}")
+            if st.button("🔮 Predict Sample"):
+                input_df = pd.DataFrame([new_inputs])
+                scaler_local = st.session_state["scaler"] if st.session_state.get("scaler") else MinMaxScaler().fit(df[selected_features])
+                input_scaled = scaler_local.transform(input_df)
+                pred = st.session_state["model"].predict(input_scaled)
+                st.subheader("Prediction")
                 if st.session_state["task_mode"] == "Classification":
-                    pred_label, pred_color, pred_explanation = interpret_label(new_prediction[0])
-                    st.markdown(f"**Predicted Soil Fertility Level:** <span style='color:{pred_color}; font-size:1.2em;'>**{pred_label}**</span>", unsafe_allow_html=True)
-                    st.write(pred_explanation)
+                    pred_label, color, expl = interpret_label(pred[0])
+                    st.markdown(f"**Predicted Fertility:** <span style='color:{color};font-weight:700'>{pred_label}</span>", unsafe_allow_html=True)
+                    st.write(expl)
                 else:
-                    st.markdown(f"**Predicted Nitrogen Level:** <span style='color:{st.session_state['current_theme']['primary_color']}; font-size:1.2em;'>**{new_prediction[0]:.2f}**</span>", unsafe_allow_html=True)
+                    st.markdown(f"**Predicted Nitrogen:** <span style='color:{st.session_state['current_theme']['primary_color']};font-weight:700'>{pred[0]:.3f}</span>", unsafe_allow_html=True)
         else:
-            st.info("Train a model first to enable new predictions.")
+            st.info("Train a model in this page or use the 'Start Quick Model' from Home to get a quick result.")
 
 # ----------------- RESULTS -----------------
 elif selected == "📈 Results":
-    st.title("📈 Model Results & Soil Health Interpretation")
-    st.markdown("View the performance of your trained Random Forest model and get insights into soil health.")
-
+    st.title("📈 Model Results & Interpretation")
     if not st.session_state.get("results"):
-        st.info("Please train a model first in the 'Modeling' tab to see results.")
+        st.info("No trained model in session. Train a model first (Modeling or Quick Model).")
     else:
         results = st.session_state["results"]
         task = results["task"]
         y_test = np.array(results["y_test"])
         y_pred = np.array(results["y_pred"])
-        
-        if len(y_test) != len(y_pred):
-            st.error("⚠️ Mismatch between test and prediction lengths. Please retrain your model.")
-        else:
-            st.subheader("Model Summary")
-            st.write(f"Model: **{results.get('model_name','Random Forest')}** — Task: **{task}**")
-            if task == "Classification":
-                try:
-                    acc = accuracy_score(y_test, y_pred)
-                    st.metric("Accuracy", f"{acc:.3f}")
-                    st.subheader("Classification Report")
-                    st.text(classification_report(y_test, y_pred))
-                    st.subheader("Confusion Matrix")
-                    cm = confusion_matrix(y_test, y_pred, labels=np.unique(y_test))
-                    fig_cm = px.imshow(cm, text_auto=True, labels=dict(x="Predicted", y="Actual", color="Count"),
-                                       x=np.unique(y_test), y=np.unique(y_test), color_continuous_scale=px.colors.sequential.Blues)
-                    fig_cm.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_cm, use_container_width=True)
-                except Exception as e:
-                    st.warning(f"Could not compute classification metrics: {e}")
-            else:
-                try:
-                    mse = mean_squared_error(y_test.astype(float), y_pred.astype(float))
-                    r2 = r2_score(y_test.astype(float), y_pred.astype(float))
-                    st.metric("MSE", f"{mse:.3f}")
-                    st.metric("R²", f"{r2:.3f}")
-                    st.subheader("Regression: Actual vs Predicted")
-                    fig = px.scatter(x=y_test.astype(float), y=y_pred.astype(float), labels={'x':'Actual','y':'Predicted'}, title="Actual vs Predicted")
-                    fig.add_shape(type="line", x0=min(y_test.astype(float)), x1=max(y_test.astype(float)), y0=min(y_test.astype(float)), y1=max(y_test.astype(float)), line=dict(dash="dash", color="white"))
-                    fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.warning(f"Could not compute regression metrics: {e}")
 
-            # Feature importance
+        st.subheader("Model Summary")
+        st.write(f"Model: **{results.get('model_name','Random Forest Model')}**")
+        st.write(f"Task: **{task}**")
+        if results.get("cv_summary"):
+            cv = results["cv_summary"]
+            st.write(f"Cross-validation mean score: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+
+        st.subheader("Performance Metrics")
+        if task == "Classification":
             try:
-                fi = np.array(results.get("feature_importances", []))
-                names = results.get("feature_names", [])
-                if fi.size and len(names):
-                    fi_df = pd.DataFrame({"feature": names, "importance": fi})
-                    fi_df = fi_df.sort_values("importance", ascending=False)
-                    st.subheader("Feature Importances")
-                    fig_fi = px.bar(fi_df, x="importance", y="feature", orientation="h", title="Feature Importances",
-                                    color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
-                    fig_fi.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_fi, use_container_width=True)
+                acc = accuracy_score(y_test, y_pred)
+                st.metric("Accuracy", f"{acc:.3f}")
             except Exception:
-                pass
+                st.write("Accuracy N/A")
+            st.markdown("**Classification Report**")
+            try:
+                report = classification_report(y_test, y_pred, output_dict=False)
+                st.text(report)
+            except Exception:
+                st.text(classification_report(y_test, y_pred))
+            cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
+            fig_cm = px.imshow(cm, text_auto=True, title="Confusion Matrix (Low / Moderate / High)")
+            fig_cm.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_cm, use_container_width=True)
+        else:
+            mse = mean_squared_error(y_test, y_pred)
+            rmse = np.sqrt(mse)
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
+            st.metric("RMSE", f"{rmse:.3f}")
+            st.metric("MAE", f"{mae:.3f}")
+            st.metric("R²", f"{r2:.3f}")
 
-# ----------------- INSIGHTS (About / Team) -----------------
+            df_res = pd.DataFrame({"y_test": y_test, "y_pred": y_pred})
+            fig_scatter = px.scatter(df_res, x="y_test", y="y_pred", trendline="ols",
+                                     title="Actual vs Predicted Nitrogen")
+            fig_scatter.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_scatter, use_container_width=True)
+
+            df_res["residual"] = df_res["y_test"] - df_res["y_pred"]
+            fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
+            fig_res.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_res, use_container_width=True)
+
+        st.subheader("Feature Importances")
+        fi = results.get("feature_importances", [])
+        feat = results.get("X_columns", [])
+        if fi and feat:
+            df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+            fig_fi = px.bar(df_fi, x="importance", y="feature", orientation="h", title="Feature Importances")
+            fig_fi.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_fi, use_container_width=True)
+        else:
+            st.info("No feature importances available.")
+
+        st.markdown("---")
+        st.markdown("You can save the trained model and scaler for later use:")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save Model"):
+                if st.session_state.get("model"):
+                    joblib.dump(st.session_state["model"], "rf_model.joblib")
+                    st.success("Model saved as rf_model.joblib")
+                else:
+                    st.warning("No model in session to save.")
+        with col2:
+            if st.button("💾 Save Scaler"):
+                if st.session_state.get("scaler"):
+                    joblib.dump(st.session_state["scaler"], "scaler.joblib")
+                    st.success("Scaler saved as scaler.joblib")
+                else:
+                    st.warning("No scaler in session to save.")
+
+# ----------------- INSIGHTS -----------------
 elif selected == "🌿 Insights":
-    st.title("🌿 About & Team")
-    st.markdown("Project overview and team information.")
+    st.title("🌿 Soil Health Insights")
+    st.markdown("Automated soil health recommendations based on model outputs and feature signals.")
+    if st.session_state["results"] is None:
+        st.info("Train a model to get data-driven insights.")
+    else:
+        df = st.session_state["df"]
+        fi = st.session_state["results"].get("feature_importances", [])
+        feat = st.session_state["results"].get("X_columns", [])
+        if fi and feat:
+            df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
+            st.subheader("Top Features Influencing Predictions")
+            for i, row in df_fi.head(5).iterrows():
+                st.write(f"- **{row['feature']}** (importance: {row['importance']:.3f}) — median: {df[row['feature']].median():.3f}")
+            st.markdown("### Recommendations")
+            st.write("The suggestions below are generic. Use domain expertise before applying changes to soils.")
+            if 'Nitrogen' in df.columns:
+                median_n = df['Nitrogen'].median()
+                if median_n < df['Nitrogen'].quantile(0.33):
+                    st.info("Nitrogen tends to be low — consider organic amendments like compost or legume cover crops.")
+                elif median_n > df['Nitrogen'].quantile(0.66):
+                    st.warning("Nitrogen tends to be high — evaluate fertilizer application and leaching risks.")
+                else:
+                    st.success("Nitrogen levels are moderate across samples.")
+        else:
+            st.info("No model-based insights available yet. Train a model first.")
 
-    # Simplified profile display WITHOUT profile picture upload and WITHOUT tutorial text.
-    # This removes the "upload profile pic" UI and related tutorial that existed previously.
-    st.subheader("Team")
-    # If you have multiple members, list them here — for privacy we'll show the current user's login as one profile
-    current_user = st.session_state.get("current_user", None)
-    if not current_user:
-        # Fallback to GitHub login provided by session (from the conversation context)
-        current_user = "ciandreazalp11"
-
-    col1, col2, col3 = st.columns(3)
-    members = [
-        {"name": current_user, "role": "BSIS - 4A student"},
-        {"name": "Teammate 2", "role": "BSIS - 4A student"},
-        {"name": "Teammate 3", "role": "BSIS - 4A student"},
-    ]
-    cols = [col1, col2, col3]
-    for i, m in enumerate(members):
-        with cols[i]:
-            st.markdown(f"### {m['name']}")
-            # No profile upload button (removed).
-            # Put a small button under the name indicating their program/role
-            st.button(m["role"], key=f"role_btn_{i}", disabled=True)
+# ----------------- ABOUT / PROFILE -----------------
+elif selected == "👤 About":
+    st.title("👤 About the Makers")
+    st.markdown("Developed by:")
+    st.write("")  # spacing
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        render_profile("Andre Oneal A. Plaza", "profile_andre", "upload_andre")
+    with col_b:
+        render_profile("Rica Baliling", "profile_rica", "upload_rica")
 
     st.markdown("---")
-    st.subheader("About the System")
-    st.write("This application helps analyze soil health by using Random Forest models to classify fertility (Low/Moderate/High) or predict Nitrogen levels. Upload clean soil analysis datasets and use the Modeling tab to train a model.")
-    st.markdown("If you want to add more team members, update the `members` list inside the `Insights` branch in app.py.")
+    st.markdown("How to add profile pictures (3 options):")
+    st.markdown("""
+    1. Quick (recommended while testing locally): Use the 'Choose ... profile image' uploader above to upload an image directly while running the app. The image will be stored in the session memory while the app runs.
+    2. For deployment (permanent): add your image files to the repository (e.g., an 'assets' folder) and reference them by their raw GitHub URL (raw.githubusercontent.com/youruser/yourrepo/branch/assets/andre.png). Then replace the session image by setting session state or editing the code to use the raw URL.
+    3. Host externally: upload images to an image host (e.g., Imgur, Cloudinary) and use the hosted image URL in your code or session.
+    """)
+    st.markdown("If you want me to add direct support to load from a GitHub raw URL or from an assets folder automatically, I can add that in the next revision.")
 
-# ----------------- Footer -----------------
-st.markdown(f"<div class='footer'>Made with 🌱 — Soil Health System Prototype</div>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("Credits & Contact")
+    st.write("Developed for a capstone project. Feel free to include an email or GitHub handle here.")
+
+# End of file
