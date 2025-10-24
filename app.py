@@ -14,6 +14,7 @@ import time
 import base64
 from PIL import Image
 import io as sysio
+import os
 
 st.set_page_config(
     page_title="Machine Learning-Driven Soil Analysis for Sustainable Agriculture System",
@@ -265,41 +266,76 @@ def pil_to_base64(img: Image.Image, fmt="PNG"):
     return b
 
 def render_profile(name, session_key, upload_key):
-    st.markdown("<div style='display:flex;align-items:center;gap:12px;'>", unsafe_allow_html=True)
-    # show circle (either placeholder holo or uploaded image)
-    img_b64 = st.session_state.get(session_key)
+    """
+    REPLACED function: now uses static images from assets/ folder (andre.png / rica.png)
+    and displays a neon-glow circular avatar. Uploaders and hints removed.
+    Signature kept the same to avoid touching other code that calls this function.
+    """
+    # container
+    st.markdown("<div style='display:flex;flex-direction:column;align-items:center;text-align:center;'>", unsafe_allow_html=True)
+
+    # determine filename by name
+    image_filename = None
+    if "Andre" in name:
+        image_filename = "andre.png"
+    elif "Rica" in name:
+        image_filename = "rica.png"
+
+    img_b64 = None
+    if image_filename:
+        image_path = os.path.join("assets", image_filename)
+        if os.path.exists(image_path):
+            try:
+                with open(image_path, "rb") as f:
+                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+            except Exception:
+                img_b64 = None
+
+    # neon glow CSS (keeps visual style but isolated here)
+    st.markdown("""
+    <style>
+    .neon-glow {
+        width:132px;
+        height:132px;
+        border-radius:50%;
+        padding:6px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        box-shadow: 0 0 20px rgba(129,199,132,0.35), 0 0 40px rgba(165,214,167,0.18);
+        background: radial-gradient(circle at 50% 50%, rgba(129,199,132,0.12), rgba(0,0,0,0.00));
+    }
+    .neon-img {
+        width:120px;
+        height:120px;
+        border-radius:50%;
+        object-fit:cover;
+        border:3px solid rgba(255,255,255,0.06);
+        display:block;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     if img_b64:
         html = f"""
-        <div class='profile-holo'>
-          <div class='profile-circle'>
-            <img src='data:image/png;base64,{img_b64}' style='width:120px;height:120px;object-fit:cover;border-radius:50%;display:block;'/>
-          </div>
+        <div class="neon-glow">
+            <img class="neon-img" src="data:image/png;base64,{img_b64}" />
         </div>
         """
-        st.markdown(html, unsafe_allow_html=True)
     else:
-        placeholder = f"""
-        <div class='profile-holo'>
-          <div class='profile-circle' style='background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));'>
-            <div style='font-size:36px;line-height:120px;opacity:0.65;'>👤</div>
-          </div>
+        html = """
+        <div class="neon-glow">
+            <div style="font-size:44px;opacity:0.75;">👤</div>
         </div>
         """
-        st.markdown(placeholder, unsafe_allow_html=True)
 
-    st.markdown(f"<div style='display:block'><div class='profile-name'>{name}</div><div class='uploader-hint'>Upload an image to replace placeholder</div></div>", unsafe_allow_html=True)
+    st.markdown(html, unsafe_allow_html=True)
+
+    # name + centered BSIS 4-A (replaces uploader hint + "Upload an image..." text)
+    st.markdown(f"<div style='margin-top:8px;font-weight:700;color:{st.session_state['current_theme']['secondary_color']};'>{name}</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:14px;color:rgba(255,255,255,0.85);margin-top:4px;font-weight:600;'>BSIS 4-A</div>", unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
-
-    # uploader underneath
-    file = st.file_uploader(f"Choose {name} profile image (optional)", type=['png','jpg','jpeg'], key=upload_key)
-    if file:
-        try:
-            img = Image.open(file).convert("RGB")
-            img_b64_new = pil_to_base64(img)
-            st.session_state[session_key] = img_b64_new
-            st.success(f"{name} profile updated.")
-        except Exception as e:
-            st.error(f"Couldn't read the image: {e}")
 
 # ----------------- Reusable upload & preprocess function (used on Home) -----------------
 def upload_and_preprocess_widget():
@@ -764,18 +800,10 @@ elif selected == "👤 About":
     st.write("")  # spacing
     col_a, col_b = st.columns([1,1])
     with col_a:
+        # call kept the same signature to avoid impacting other code
         render_profile("Andre Oneal A. Plaza", "profile_andre", "upload_andre")
     with col_b:
         render_profile("Rica Baliling", "profile_rica", "upload_rica")
-
-    st.markdown("---")
-    st.markdown("How to add profile pictures (3 options):")
-    st.markdown("""
-    1. Quick (recommended while testing locally): Use the 'Choose ... profile image' uploader above to upload an image directly while running the app. The image will be stored in the session memory while the app runs.
-    2. For deployment (permanent): add your image files to the repository (e.g., an 'assets' folder) and reference them by their raw GitHub URL (raw.githubusercontent.com/youruser/yourrepo/branch/assets/andre.png). Then replace the session image by setting session state or editing the code to use the raw URL.
-    3. Host externally: upload images to an image host (e.g., Imgur, Cloudinary) and use the hosted image URL in your code or session.
-    """)
-    st.markdown("If you want me to add direct support to load from a GitHub raw URL or from an assets folder automatically, I can add that in the next revision.")
 
     st.markdown("---")
     st.markdown("Credits & Contact")
