@@ -1,4 +1,4 @@
-# full revised app.py (based on your provided code, only changed requested parts)
+# (Full file begins)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -92,10 +92,9 @@ if "profile_andre" not in st.session_state:
     st.session_state["profile_andre"] = None
 if "profile_rica" not in st.session_state:
     st.session_state["profile_rica"] = None
-
-# used for navigation via proceed buttons (Home)
-if "page_selected" not in st.session_state:
-    st.session_state["page_selected"] = None
+# navigation index for sidebar
+if "page_index" not in st.session_state:
+    st.session_state["page_index"] = 0
 
 # ----------------- THEME APPLIER + BACKGROUND -----------------
 def apply_theme(theme):
@@ -182,6 +181,14 @@ def apply_theme(theme):
     /* small form tweaks */
     div[data-testid="stToolbar"] {{ background: transparent; }}
     /* reduce verbose text in option_menu button (we removed instructions by default) */
+    .card {{
+      background: rgba(255,255,255,0.02);
+      padding: 12px;
+      border-radius: 10px;
+      border:1px solid rgba(255,255,255,0.03);
+      margin-bottom:8px;
+    }}
+    .metric-desc {{ font-size:12px; color:rgba(255,255,255,0.85); opacity:0.9; }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -191,6 +198,9 @@ def apply_theme(theme):
 apply_theme(st.session_state["current_theme"])
 
 # ----------------- SIDEBAR (redesigned) -----------------
+# New order: Home, Modeling, Visualization, Results, Insights, About
+PAGES = ["🏠 Home", "🤖 Modeling", "📊 Visualization", "📈 Results", "🌿 Insights", "👤 About"]
+
 with st.sidebar:
     st.markdown(
         f"""
@@ -203,13 +213,13 @@ with st.sidebar:
     )
     st.write("---")
 
-    # NOTE: Modeling moved before Visualization per user request.
+    default_index = st.session_state.get("page_index", 0)
     selected = option_menu(
         None,
-        ["🏠 Home", "🤖 Modeling", "📊 Visualization", "📈 Results", "🌿 Insights", "👤 About"],
+        PAGES,
         icons=["house", "robot", "bar-chart", "graph-up", "lightbulb", "person-circle"],
         menu_icon="list",
-        default_index=0,
+        default_index=default_index,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
             "icon": {"color": st.session_state["current_theme"]["menu_icon_color"], "font-size": "18px"},
@@ -217,16 +227,15 @@ with st.sidebar:
             "nav-link-selected": {"background-color": st.session_state["current_theme"]["nav_link_selected_bg"]},
         }
     )
+    # persist index for programmatic navigation
+    try:
+        st.session_state["page_index"] = PAGES.index(selected)
+    except Exception:
+        st.session_state["page_index"] = 0
+
     st.write("---")
     # minimal footer text
     st.markdown(f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>", unsafe_allow_html=True)
-
-    # If a Home "Proceed" button set this, override selected
-    if st.session_state.get("page_selected"):
-        # override the local 'selected' with the stored value
-        selected = st.session_state["page_selected"]
-        # clear to avoid persistent override on reruns unless user clicks again
-        st.session_state["page_selected"] = None
 
 # ----------------- COMMON SETTINGS -----------------
 column_mapping = {
@@ -411,120 +420,61 @@ def upload_and_preprocess_widget():
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
             download_df_button(df)
-
-            # After upload success show proceed buttons (per user request)
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("➡️ Proceed to Modeling"):
-                    st.session_state["page_selected"] = "🤖 Modeling"
-                    st.experimental_rerun()
-            with col2:
-                if st.button("➡️ Proceed to Visualization"):
-                    st.session_state["page_selected"] = "📊 Visualization"
-                    st.experimental_rerun()
         else:
             st.error("No valid sheets processed. Check file formats and column headers.")
 
-# ----------------- HOME (clean, no mode switch, no quick modeling) -----------------
+# ----------------- HOME -----------------
 if selected == "🏠 Home":
     st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
     st.markdown("<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>", unsafe_allow_html=True)
     st.write("---")
 
-    st.markdown("This app supports two purposes:")
-    st.markdown("- **Soil Fertility Prediction** (Regression): use Random Forest Regressor to predict Nitrogen levels.")
-    st.markdown("- **Soil Health Classification** (Classification): use Random Forest Classifier to classify fertility level (Low / Moderate / High).")
-    st.write("---")
-
-    # Removed the mode switch and the Quick Modeling widget per request.
+    # No task-mode toggle on Home (moved to Modeling). Home only handles upload + navigation.
     upload_and_preprocess_widget()
 
-    # If dataset exists, show summary and allow direct navigation (already included inside upload_and_preprocess_widget).
-    if st.session_state["df"] is not None:
-        # show basic dataset info
-        df = st.session_state["df"]
-        st.markdown("### Dataset Summary")
-        st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
-        st.dataframe(df.head())
+    # After upload, give clear navigation buttons to proceed
+    if st.session_state.get("df") is not None:
+        st.write("---")
+        st.markdown("Proceed to:")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("➡️ Proceed to Modeling"):
+                st.session_state["page_index"] = PAGES.index("🤖 Modeling")
+                st.experimental_rerun()
+        with col2:
+            if st.button("➡️ Proceed to Visualization"):
+                st.session_state["page_index"] = PAGES.index("📊 Visualization")
+                st.experimental_rerun()
 
 # ----------------- MODELING -----------------
 elif selected == "🤖 Modeling":
     st.title("🤖 Modeling — Random Forest")
-    st.markdown("Fine tune hyperparameters and train Random Forest models for Soil Fertility (Regression) or Soil Health (Classification).")
+    st.markdown("Fine tune hyperparameters and train Random Forest models for Classification or Regression.")
 
     if st.session_state["df"] is None:
         st.info("Please upload a dataset first in 'Home'.")
     else:
         df = st.session_state["df"].copy()
-        st.subheader("Select Task (Soil Health vs Fertility Prediction)")
-
-        # --------- MODE TOGGLE (checkbox-driven) -----------
-        # The checkbox is the functional control; we also render a decorative HTML switch that changes color.
-        # Checkbox label indicates current mode for clarity
-        default_checked = True if st.session_state.get("task_mode") == "Regression" else False
-        is_regression = st.checkbox("Switch to Regression (Fertility Prediction)", value=default_checked, key="model_mode_checkbox")
-        if is_regression:
-            st.session_state["task_mode"] = "Regression"
-            st.session_state["current_theme"] = theme_sakura
-        else:
-            st.session_state["task_mode"] = "Classification"
-            st.session_state["current_theme"] = theme_classification
-
-        # Apply theme on mode change (keeps look consistent)
-        apply_theme(st.session_state["current_theme"])
-
-        # Decorative rounded switch reflecting the state (purely visual)
-        # Green when Classification, Pink when Regression
-        color_on = "#81c784" if st.session_state["task_mode"] == "Classification" else "#ff8aa2"
-        color_off = "#4c4c4c"
-        switch_html = f"""
-        <style>
-        /* Decorative rounded switch */
-        .switch-wrap {{
-          display:flex; align-items:center; gap:12px; margin-top:6px;
-        }}
-        .switch-box {{
-          width:60px; height:30px; border-radius:20px;
-          background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-          padding:3px; display:flex; align-items:center; transition: all .15s;
-          box-shadow: inset 0 -2px 6px rgba(0,0,0,0.25);
-        }}
-        .switch-knob {{
-          width:24px; height:24px; border-radius:50%;
-          background: {color_on};
-          box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-          transform: translateX({'26px' if st.session_state['task_mode']=='Regression' else '0px'});
-          transition: all .18s;
-        }}
-        .switch-label {{
-          font-size:14px; color: {st.session_state['current_theme']['text_color']}; font-weight:600;
-        }}
-        </style>
-        <div class="switch-wrap">
-          <div class="switch-box">
-            <div class="switch-knob"></div>
-          </div>
-          <div class="switch-label">{'Regression (Fertility)' if st.session_state['task_mode']=='Regression' else 'Classification (Soil Health)'}</div>
-        </div>
-        """
-        st.markdown(switch_html, unsafe_allow_html=True)
-        st.write("---")
+        st.subheader("Select Task")
+        # Keep task radio here (single place to change mode)
+        task = st.radio("Choose modeling task:", ["Classification", "Regression"], index=0 if st.session_state["task_mode"] == "Classification" else 1)
+        if task != st.session_state["task_mode"]:
+            st.session_state["task_mode"] = task
+            st.session_state["current_theme"] = theme_classification if task == "Classification" else theme_sakura
+            apply_theme(st.session_state["current_theme"])
 
         st.markdown(f"Current Mode: **{st.session_state['task_mode']}**", unsafe_allow_html=True)
 
-        # Keep same checks for Nitrogen presence and prepare target based on chosen mode
         if 'Nitrogen' not in df.columns:
             st.error("Missing 'Nitrogen' column required as target. Ensure your dataset contains 'Nitrogen'.")
             st.stop()
 
+        # prepare target and features
         if st.session_state["task_mode"] == "Classification":
             df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
             y = df['Fertility_Level']
-            st.markdown("**Mode purpose:** Soil Health Classification — classify samples into Low / Moderate / High fertility classes.")
         else:
             y = df['Nitrogen']
-            st.markdown("**Mode purpose:** Soil Fertility Prediction — predict Nitrogen concentrations (continuous target).")
 
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
         # drop Nitrogen from features
@@ -584,7 +534,11 @@ elif selected == "🤖 Modeling":
                     "model_name": f"Random Forest {st.session_state['task_mode']} Model",
                     "X_columns": selected_features,
                     "feature_importances": model.feature_importances_.tolist(),
-                    "cv_summary": cv_summary
+                    "cv_summary": cv_summary,
+                    "n_estimators": n_estimators,
+                    "max_depth": max_depth,
+                    "train_size": X_train.shape[0],
+                    "test_size": X_test.shape[0]
                 }
                 st.session_state["trained_on_features"] = selected_features
                 st.success("✅ Training completed. Go to 'Results' to inspect performance.")
@@ -607,73 +561,204 @@ elif selected == "🤖 Modeling":
                 else:
                     st.markdown(f"**Predicted Nitrogen:** <span style='color:{st.session_state['current_theme']['primary_color']};font-weight:700'>{pred[0]:.3f}</span>", unsafe_allow_html=True)
         else:
-            st.info("Train a model on this page to enable predictions and model-based visualizations.")
+            st.info("Train a model in this page to enable predictions. Modeling is the canonical place to run/train models.")
+
+# ----------------- VISUALIZATION -----------------
+elif selected == "📊 Visualization":
+    st.title("📊 Data Visualization")
+    st.markdown("Explore distributions, correlations, and relationships in your preprocessed data.")
+    if st.session_state["df"] is None:
+        st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
+    else:
+        df = st.session_state["df"].copy()
+        # Ensure fertility label for classification visualizations exists if needed
+        if 'Nitrogen' in df.columns and 'Fertility_Level' not in df.columns:
+            df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
+
+        # Parameter overview charts (histograms + brief explanation)
+        st.markdown("### Parameter Overview")
+        cols_for_overview = ['pH', 'Nitrogen', 'Phosphorus', 'Potassium', 'Moisture', 'Organic Matter']
+        present = [c for c in cols_for_overview if c in df.columns]
+
+        # layout: two columns for histograms
+        for i in range(0, len(present), 2):
+            c1 = present[i]
+            c2 = present[i+1] if i+1 < len(present) else None
+            col1, col2 = st.columns(2)
+            with col1:
+                feature = c1
+                fig = px.histogram(df, x=feature, nbins=30, title=f"Distribution of {feature}")
+                fig.update_layout(template="plotly_dark", height=320)
+                st.plotly_chart(fig, use_container_width=True)
+                # explanation
+                if feature == 'pH':
+                    st.markdown("<div class='metric-desc'>Shows whether soil samples are acidic, neutral, or alkaline — important for nutrient availability.</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<div class='metric-desc'>Distribution of {feature} across samples — helps detect skew, outliers, and typical levels.</div>", unsafe_allow_html=True)
+            with col2:
+                if c2:
+                    feature = c2
+                    fig = px.histogram(df, x=feature, nbins=30, title=f"Distribution of {feature}")
+                    fig.update_layout(template="plotly_dark", height=320)
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.markdown(f"<div class='metric-desc'>Distribution of {feature} across samples — helps detect skew, outliers, and typical levels.</div>", unsafe_allow_html=True)
+
+        st.markdown("### Correlation Heatmap")
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(numeric_cols) >= 2:
+            corr = df[numeric_cols].corr()
+            fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Correlation Heatmap")
+            fig_corr.update_layout(template="plotly_dark", height=480)
+            st.plotly_chart(fig_corr, use_container_width=True)
+            st.markdown("<div class='metric-desc'>Correlation matrix highlights relationships between soil properties (positive/negative correlations).</div>", unsafe_allow_html=True)
+        else:
+            st.info("Not enough numeric columns to generate a correlation heatmap.")
+
+        st.write("---")
+        st.markdown("### Mode-specific Visualizations")
+        mode = st.session_state.get("task_mode", "Classification")
+        st.markdown(f"Current Mode: **{mode}**. (Change mode in Modeling.)")
+
+        if mode == "Classification":
+            # Show fertility-level colored histograms / stacked distributions
+            if 'Fertility_Level' not in df.columns:
+                df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
+            st.markdown("#### Fertility Level Breakdown")
+            col1, col2 = st.columns(2)
+            with col1:
+                if 'Nitrogen' in df.columns:
+                    fig_n = px.histogram(df, x='Nitrogen', color='Fertility_Level', nbins=30, barmode='overlay', title="Nitrogen distribution by Fertility Level")
+                    fig_n.update_layout(template="plotly_dark", height=380)
+                    st.plotly_chart(fig_n, use_container_width=True)
+                    st.markdown("<div class='metric-desc'>Shows how Nitrogen values map to the fertility labels (Low/Moderate/High).</div>", unsafe_allow_html=True)
+                else:
+                    st.info("Nitrogen column missing for fertility-level visualization.")
+            with col2:
+                # example: pH by fertility level if present
+                if 'pH' in df.columns:
+                    fig_ph = px.violin(df, x='Fertility_Level', y='pH', box=True, title="pH distribution per Fertility Level")
+                    fig_ph.update_layout(template="plotly_dark", height=380)
+                    st.plotly_chart(fig_ph, use_container_width=True)
+                    st.markdown("<div class='metric-desc'>pH distribution across fertility classes — identifies pH shifts by class.</div>", unsafe_allow_html=True)
+                else:
+                    st.info("pH not available for a pH-by-class plot.")
+        else:
+            # Regression mode visuals (Actual vs Predicted etc.)
+            st.markdown("#### Regression Visuals — Fertility Prediction (Nitrogen)")
+            if st.session_state.get("results") and st.session_state["results"].get("task") == "Regression":
+                results = st.session_state["results"]
+                y_test = np.array(results["y_test"])
+                y_pred = np.array(results["y_pred"])
+                df_res = pd.DataFrame({"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred})
+                col1, col2 = st.columns([1.2, 1])
+                with col1:
+                    # Actual vs Predicted with OLS trendline (requires statsmodels)
+                    try:
+                        fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
+                                          title="Actual vs Predicted Nitrogen (Model Predictions)")
+                        fig1.update_layout(template="plotly_dark", height=420)
+                        st.plotly_chart(fig1, use_container_width=True)
+                        st.markdown("<div class='metric-desc'>Actual vs Predicted with a linear fit — closer to diagonal means better predictions.</div>", unsafe_allow_html=True)
+                    except Exception as e:
+                        # fallback
+                        fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", title="Actual vs Predicted Nitrogen (Model Predictions)")
+                        fig1.update_layout(template="plotly_dark", height=420)
+                        st.plotly_chart(fig1, use_container_width=True)
+                        st.markdown("<div class='metric-desc'>Actual vs Predicted (trendline unavailable). Install statsmodels to enable OLS trendline.</div>", unsafe_allow_html=True)
+                with col2:
+                    # residuals
+                    df_res["residual"] = df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
+                    fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution (Actual - Predicted)")
+                    fig_res.update_layout(template="plotly_dark", height=420)
+                    st.plotly_chart(fig_res, use_container_width=True)
+                    st.markdown("<div class='metric-desc'>Residual distribution shows bias & spread — ideally centered near zero and narrow.</div>", unsafe_allow_html=True)
+            else:
+                st.info("No regression model results available. Train a Regression model in Modeling first.")
 
 # ----------------- RESULTS -----------------
 elif selected == "📈 Results":
     st.title("📈 Model Results & Interpretation")
     if not st.session_state.get("results"):
-        st.info("No trained model in session. Train a model first (Modeling or Quick Model).")
+        st.info("No trained model in session. Train a model first (Modeling).")
     else:
         results = st.session_state["results"]
         task = results["task"]
         y_test = np.array(results["y_test"])
         y_pred = np.array(results["y_pred"])
 
-        st.subheader("Model Summary")
-        st.write(f"Model: **{results.get('model_name','Random Forest Model')}**")
-        st.write(f"Task: **{task}**")
-        if results.get("cv_summary"):
-            cv = results["cv_summary"]
-            st.write(f"Cross-validation mean score: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+        # Model summary card
+        st.markdown("<div class='card'><strong>Model Summary</strong></div>", unsafe_allow_html=True)
+        col_a, col_b = st.columns([2,1])
+        with col_a:
+            st.write(f"**Model:** {results.get('model_name','Random Forest')}")
+            if results.get("cv_summary"):
+                cv = results["cv_summary"]
+                st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+            st.write(f"Trained features: **{', '.join(results.get('X_columns', []))}**")
+            st.write(f"Training set size: **{results.get('train_size','-')}**, Test set size: **{results.get('test_size','-')}**")
+        with col_b:
+            st.markdown("<div class='card'>Hyperparameters</div>", unsafe_allow_html=True)
+            st.write(f"- n_estimators: **{results.get('n_estimators','-')}**")
+            st.write(f"- max_depth: **{results.get('max_depth','-')}**")
 
+        st.markdown("---")
         st.subheader("Performance Metrics")
         if task == "Classification":
+            # Compact metrics row
+            col1, col2, col3 = st.columns(3)
             try:
                 acc = accuracy_score(y_test, y_pred)
-                st.metric("Accuracy", f"{acc:.3f}")
+                col1.metric("Accuracy", f"{acc:.3f}")
+                col1.markdown("<div class='metric-desc'>Fraction of correct predictions.</div>", unsafe_allow_html=True)
             except Exception:
-                st.write("Accuracy N/A")
+                col1.write("Accuracy N/A")
+            # show confusion matrix
+            cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
+            fig_cm = px.imshow(cm, text_auto=True, title="Confusion Matrix (Low / Moderate / High)")
+            fig_cm.update_layout(template="plotly_dark", height=360)
+            st.plotly_chart(fig_cm, use_container_width=True)
+            st.markdown("<div class='metric-desc'>Rows: actual classes. Columns: predicted classes. Diagonal = correct predictions.</div>", unsafe_allow_html=True)
+
             st.markdown("**Classification Report**")
             try:
                 report = classification_report(y_test, y_pred, output_dict=False)
                 st.text(report)
             except Exception:
                 st.text(classification_report(y_test, y_pred))
-            cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
-            fig_cm = px.imshow(cm, text_auto=True, title="Confusion Matrix (Low / Moderate / High)")
-            fig_cm.update_layout(template="plotly_dark")
-            st.plotly_chart(fig_cm, use_container_width=True)
         else:
+            # Regression metrics explained clearly
             mse = mean_squared_error(y_test, y_pred)
             rmse = np.sqrt(mse)
             mae = mean_absolute_error(y_test, y_pred)
             r2 = r2_score(y_test, y_pred)
-            st.metric("RMSE", f"{rmse:.3f}")
-            st.metric("MAE", f"{mae:.3f}")
-            st.metric("R²", f"{r2:.3f}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("RMSE", f"{rmse:.3f}")
+            col1.markdown("<div class='metric-desc'>Root Mean Square Error — lower is better.</div>", unsafe_allow_html=True)
+            col2.metric("MAE", f"{mae:.3f}")
+            col2.markdown("<div class='metric-desc'>Mean Absolute Error — average absolute error.</div>", unsafe_allow_html=True)
+            col3.metric("R²", f"{r2:.3f}")
+            col3.markdown("<div class='metric-desc'>R²: variance explained by the model (1.0 is perfect).</div>", unsafe_allow_html=True)
 
-            df_res = pd.DataFrame({"y_test": y_test, "y_pred": y_pred})
-            fig_scatter = px.scatter(df_res, x="y_test", y="y_pred", trendline="ols",
-                                     title="Actual vs Predicted Nitrogen")
-            fig_scatter.update_layout(template="plotly_dark")
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-            df_res["residual"] = df_res["y_test"] - df_res["y_pred"]
-            fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
-            fig_res.update_layout(template="plotly_dark")
-            st.plotly_chart(fig_res, use_container_width=True)
-
-        st.subheader("Feature Importances")
-        fi = results.get("feature_importances", [])
-        feat = results.get("X_columns", [])
-        if fi and feat:
-            df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
-            fig_fi = px.bar(df_fi, x="importance", y="feature", orientation="h", title="Feature Importances")
-            fig_fi.update_layout(template="plotly_dark")
-            st.plotly_chart(fig_fi, use_container_width=True)
-        else:
-            st.info("No feature importances available.")
+            # scatter actual vs predicted (with trendline if available)
+            df_res = pd.DataFrame({"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred})
+            col1, col2 = st.columns([1.5, 1])
+            with col1:
+                try:
+                    fig_sc = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols", title="Actual vs Predicted Nitrogen")
+                    fig_sc.update_layout(template="plotly_dark", height=420)
+                    st.plotly_chart(fig_sc, use_container_width=True)
+                    st.markdown("<div class='metric-desc'>Ideal model lies near the diagonal line; trendline shows overall bias.</div>", unsafe_allow_html=True)
+                except Exception:
+                    fig_sc = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", title="Actual vs Predicted Nitrogen")
+                    fig_sc.update_layout(template="plotly_dark", height=420)
+                    st.plotly_chart(fig_sc, use_container_width=True)
+                    st.markdown("<div class='metric-desc'>Install statsmodels to enable OLS trendlines.</div>", unsafe_allow_html=True)
+            with col2:
+                df_res["residual"] = df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
+                fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
+                fig_res.update_layout(template="plotly_dark", height=420)
+                st.plotly_chart(fig_res, use_container_width=True)
+                st.markdown("<div class='metric-desc'>Residuals should be centered around 0 for an unbiased model.</div>", unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("You can save the trained model and scaler for later use:")
@@ -692,111 +777,6 @@ elif selected == "📈 Results":
                     st.success("Scaler saved as scaler.joblib")
                 else:
                     st.warning("No scaler in session to save.")
-
-# ----------------- VISUALIZATION (adaptive) -----------------
-elif selected == "📊 Visualization":
-    st.title("📊 Data Visualization")
-    st.markdown("Explore distributions, correlations, and relationships in your preprocessed data.")
-    if st.session_state["df"] is None:
-        st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
-    else:
-        df = st.session_state["df"].copy()
-
-        # Ensure labels exist for classification if needed
-        if 'Nitrogen' in df.columns and 'Fertility_Level' not in df.columns:
-            df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
-
-        mode = st.session_state.get("task_mode", "Classification")
-        st.markdown(f"**Visualization mode:** {mode} — the displayed charts adapt to the selected modeling purpose.")
-        st.write("---")
-
-        # Shared numeric columns
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        if not numeric_cols:
-            st.warning("No numeric columns available for visualization.")
-        else:
-            if mode == "Regression":
-                # Regression-focused charts: Actual vs Predicted Nitrogen, Residuals, Feature Importances
-                st.subheader("Regression / Fertility Prediction Visuals")
-                st.markdown("Designed for Nitrogen (fertility) prediction inspection.")
-
-                if st.session_state.get("results") and st.session_state["results"].get("task") == "Regression":
-                    # If model exists and is regression, show actual vs predicted and residuals
-                    res = st.session_state["results"]
-                    y_test = np.array(res["y_test"])
-                    y_pred = np.array(res["y_pred"])
-                    df_res = pd.DataFrame({"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred})
-                    fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
-                                      title="Actual vs Predicted Nitrogen (Model Predictions)")
-                    fig1.update_layout(template="plotly_dark")
-                    st.plotly_chart(fig1, use_container_width=True)
-
-                    df_res["residual"] = df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
-                    fig2 = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution (Model)")
-                    fig2.update_layout(template="plotly_dark")
-                    st.plotly_chart(fig2, use_container_width=True)
-
-                # Also offer cross-sectional Nitrogen distribution
-                fig_dist = px.histogram(df, x="Nitrogen", nbins=30, title="Nitrogen Distribution (All Samples)",
-                                        color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
-                fig_dist.update_layout(template="plotly_dark")
-                st.plotly_chart(fig_dist, use_container_width=True)
-
-                # Feature importances if available
-                if st.session_state.get("results"):
-                    fi = st.session_state["results"].get("feature_importances", [])
-                    feat = st.session_state["results"].get("X_columns", [])
-                    if fi and feat:
-                        df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
-                        fig_fi = px.bar(df_fi, x="importance", y="feature", orientation="h", title="Feature Importances (Model)")
-                        fig_fi.update_layout(template="plotly_dark")
-                        st.plotly_chart(fig_fi, use_container_width=True)
-                else:
-                    st.info("Train a regression model in Modeling to enable model-based regression visualizations.")
-
-            else:
-                # Classification-focused charts: Fertility Level distribution, pH vs nutrients scatter colored by Fertility Level
-                st.subheader("Classification / Soil Health Visuals")
-                st.markdown("Designed to inspect fertility level distributions and nutrient relationships.")
-
-                # Fertility level distribution
-                if 'Fertility_Level' not in df.columns:
-                    df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
-
-                fig_level = px.histogram(df, x='Fertility_Level', title="Fertility Level Distribution",
-                                        category_orders={"Fertility_Level": ["Low", "Moderate", "High"]})
-                fig_level.update_layout(template="plotly_dark")
-                st.plotly_chart(fig_level, use_container_width=True)
-
-                # scatter pH vs Nitrogen colored by Fertility_Level (if pH exists)
-                if 'pH' in df.columns:
-                    fig_scatter = px.scatter(df, x='pH', y='Nitrogen', color='Fertility_Level',
-                                             color_discrete_map={'Low': 'red', 'Moderate': 'orange', 'High': 'green'},
-                                             title="pH vs Nitrogen (colored by Fertility Level)", hover_data=df.columns)
-                    fig_scatter.update_layout(template="plotly_dark")
-                    st.plotly_chart(fig_scatter, use_container_width=True)
-                else:
-                    st.info("pH column not present — add pH to dataset to see pH vs Nitrogen scatter.")
-
-                # Also show pairwise nutrient matrix if available (Nitrogen/Phosphorus/Potassium)
-                nut_cols = [c for c in ['Nitrogen', 'Phosphorus', 'Potassium'] if c in df.columns]
-                if len(nut_cols) >= 2:
-                    fig_pair = px.scatter_matrix(df, dimensions=nut_cols, color='Fertility_Level' if 'Fertility_Level' in df.columns else None,
-                                                 title="Nutrients pairwise relationships", color_discrete_map={'Low': 'red', 'Moderate': 'orange', 'High': 'green'})
-                    fig_pair.update_layout(template="plotly_dark", height=700)
-                    st.plotly_chart(fig_pair, use_container_width=True)
-
-                # Feature importances if available
-                if st.session_state.get("results"):
-                    fi = st.session_state["results"].get("feature_importances", [])
-                    feat = st.session_state["results"].get("X_columns", [])
-                    if fi and feat:
-                        df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
-                        fig_fi = px.bar(df_fi, x="importance", y="feature", orientation="h", title="Feature Importances (Model)")
-                        fig_fi.update_layout(template="plotly_dark")
-                        st.plotly_chart(fig_fi, use_container_width=True)
-                else:
-                    st.info("Train a classification model in Modeling to enable model-based classification visualizations.")
 
 # ----------------- INSIGHTS -----------------
 elif selected == "🌿 Insights":
