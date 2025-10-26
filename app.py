@@ -652,10 +652,10 @@ elif page == "📈 Results":
         with colA:
             st.write(f"**Model:** {results.get('model_name','Random Forest')}")
             st.write(f"**Features:** {', '.join(results.get('X_columns',[]))}")
-          if results.get("cv_summary"):
-    cv = results["cv_summary"]
-    st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
-
+        if results.get("cv_summary"):
+                cv = results["cv_summary"]
+                st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+      
 
         with colB:
             if st.button("💾 Save Model"):
