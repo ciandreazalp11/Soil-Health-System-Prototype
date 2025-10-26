@@ -772,6 +772,69 @@ elif page == "📈 Results":
                 st.plotly_chart(fig_fi, use_container_width=True)
             else:
                 st.info("No feature importances available.")
+                        # --- Final Analysis Conclusion ---
+        st.markdown("---")
+        st.subheader("🧾 Final Analysis Conclusion")
+
+        if task == "Classification":
+            try:
+                acc = accuracy_score(y_test, y_pred)
+                majority_class = pd.Series(y_pred).mode()[0] if len(y_pred) > 0 else "Unknown"
+
+                if acc >= 0.85:
+                    verdict = "🌿 Excellent — Model performance is strong and reliable."
+                    color = "green"
+                elif acc >= 0.70:
+                    verdict = "⚖️ Moderate — Model is acceptable but can be improved with more data."
+                    color = "orange"
+                else:
+                    verdict = "⚠️ Weak — Model accuracy is low; consider tuning parameters or features."
+                    color = "red"
+
+                st.markdown(
+                    f"<div style='padding:14px;border-radius:10px;background-color:rgba(255,255,255,0.05);border-left:6px solid {color};'>"
+                    f"<b>{verdict}</b><br><br>"
+                    f"Dominant predicted class: <b style='color:{color}'>{majority_class}</b> — indicating that most soils are in this fertility range."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+            except Exception:
+                st.info("Unable to compute classification summary.")
+        else:
+            try:
+                mse = mean_squared_error(y_test, y_pred)
+                rmse = np.sqrt(mse)
+                r2 = r2_score(y_test, y_pred)
+                median_pred = np.median(y_pred)
+
+                if r2 >= 0.8 and rmse < np.std(y_test) * 0.5:
+                    verdict = "🌿 Excellent — Strong predictive power; nutrient estimation is reliable."
+                    color = "green"
+                elif r2 >= 0.6:
+                    verdict = "⚖️ Moderate — Predictions are fair but could improve."
+                    color = "orange"
+                else:
+                    verdict = "⚠️ Weak — Model underfits; try refining features or parameters."
+                    color = "red"
+
+                if median_pred < np.quantile(y_test, 0.33):
+                    nutrient_status = "Low"
+                elif median_pred < np.quantile(y_test, 0.66):
+                    nutrient_status = "Moderate"
+                else:
+                    nutrient_status = "High"
+
+                st.markdown(
+                    f"<div style='padding:14px;border-radius:10px;background-color:rgba(255,255,255,0.05);border-left:6px solid {color};'>"
+                    f"<b>{verdict}</b><br><br>"
+                    f"Predicted nutrient level trend: <b style='color:{color}'>{nutrient_status}</b> — "
+                    f"the overall soil nitrogen concentration is in this range."
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+            except Exception:
+                st.info("Unable to compute regression summary.")
+
 
 # --- end of Results section ---
 
@@ -818,4 +881,5 @@ elif page == "👤 About":
     st.markdown("---")
     st.markdown("all god to be glory")
     st.write("Developed for a capstone project.")
+
 
