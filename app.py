@@ -635,9 +635,9 @@ elif page == "📊 Visualization":
 
 # ----------------- RESULTS -----------------
 # --- inside the "📈 Results" section (replace from line ~1600 onwards in your file) ---
-
 elif page == "📈 Results":
     st.title("📈 Model Results & Interpretation")
+
     if not st.session_state.get("results"):
         st.info("No trained model in session. Train a model first (Modeling or Quick Model).")
     else:
@@ -646,18 +646,28 @@ elif page == "📈 Results":
         y_test = np.array(results["y_test"])
         y_pred = np.array(results["y_pred"])
 
-        # Model summary card
+        # -------------------- MODEL SUMMARY --------------------
         st.subheader("Model Summary")
         colA, colB = st.columns([3, 2])
-           with colA:
+
+        with colA:
             st.write(f"**Model:** {results.get('model_name','Random Forest')}")
             st.write(f"**Features:** {', '.join(results.get('X_columns',[]))}")
+
             if results.get("cv_summary"):
                 cv = results["cv_summary"]
-                st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+                cv_mean = cv["mean_cv"]
+                cv_std = cv["std_cv"]
 
+                # qualitative rating
+                if cv_mean >= 0.85:
+                    remark = "🌿 Very Good"
+                elif cv_mean >= 0.70:
+                    remark = "⚖️ Moderate"
+                else:
+                    remark = "⚠️ Needs Improvement"
 
-      
+                st.write(f"Cross-val mean: **{cv_mean:.3f}** (std: {cv_std:.3f}) — {remark}")
 
         with colB:
             if st.button("💾 Save Model"):
@@ -666,6 +676,7 @@ elif page == "📈 Results":
                     st.success("Model saved as rf_model.joblib")
                 else:
                     st.warning("No model in session to save.")
+
             if st.button("💾 Save Scaler"):
                 if st.session_state.get("scaler"):
                     joblib.dump(st.session_state["scaler"], "scaler.joblib")
@@ -675,27 +686,36 @@ elif page == "📈 Results":
 
         st.markdown("---")
 
-        # Two-column layout
+        # -------------------- METRICS SECTION --------------------
         metrics_col, explain_col = st.columns([2, 1])
+
         with metrics_col:
             st.subheader("Performance Metrics")
+
             if task == "Classification":
+                # Accuracy
                 try:
                     acc = accuracy_score(y_test, y_pred)
                     st.metric("Accuracy", f"{acc:.3f}")
                 except Exception:
                     st.write("Accuracy N/A")
 
+                # Confusion Matrix
                 st.markdown("**Confusion Matrix**")
                 try:
-                    cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
-                    fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Confusion Matrix (Low / Moderate / High)")
+                    cm = confusion_matrix(y_test, y_pred, labels=["Low", "Moderate", "High"])
+                    fig_cm = px.imshow(
+                        cm,
+                        text_auto=True,
+                        color_continuous_scale=px.colors.sequential.Viridis,
+                        title="Confusion Matrix (Low / Moderate / High)"
+                    )
                     fig_cm.update_layout(template="plotly_dark", height=350)
                     st.plotly_chart(fig_cm, use_container_width=True)
                 except Exception:
                     st.write("Confusion matrix not available")
 
-                # --- Classification Report (Tabular) ---
+                # Classification Report (Tabular)
                 st.markdown("#### 📋 Classification Report (Detailed)")
                 try:
                     rep = classification_report(y_test, y_pred, output_dict=True)
@@ -703,26 +723,25 @@ elif page == "📈 Results":
                     rep_df.rename(columns={"index": "Class"}, inplace=True)
                     cols_order = ["Class", "precision", "recall", "f1-score", "support"]
                     rep_df = rep_df[[c for c in cols_order if c in rep_df.columns]]
-
                     st.dataframe(
                         rep_df.style.format({
                             "precision": "{:.2f}",
                             "recall": "{:.2f}",
                             "f1-score": "{:.2f}",
                             "support": "{:.0f}"
-                        }).background_gradient(
-                            subset=["f1-score"], cmap="Greens"
-                        ),
+                        }).background_gradient(subset=["f1-score"], cmap="Greens"),
                         use_container_width=True
                     )
-                except Exception as e:
+                except Exception:
                     st.text(classification_report(y_test, y_pred))
 
             else:
+                # Regression metrics
                 mse = mean_squared_error(y_test, y_pred)
                 rmse = np.sqrt(mse)
                 mae = mean_absolute_error(y_test, y_pred)
                 r2 = r2_score(y_test, y_pred)
+
                 st.metric("RMSE", f"{rmse:.3f}")
                 st.metric("MAE", f"{mae:.3f}")
                 st.metric("R²", f"{r2:.3f}")
@@ -732,8 +751,13 @@ elif page == "📈 Results":
                 st.dataframe(df_res.head(10), use_container_width=True)
 
                 st.markdown("**Actual vs Predicted**")
-                fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
-                                  title="Actual vs Predicted Nitrogen (Model Predictions)")
+                fig1 = px.scatter(
+                    df_res,
+                    x="Actual_Nitrogen",
+                    y="Predicted_Nitrogen",
+                    trendline="ols",
+                    title="Actual vs Predicted Nitrogen (Model Predictions)"
+                )
                 fig1.update_layout(template="plotly_dark")
                 st.plotly_chart(fig1, use_container_width=True)
 
@@ -742,19 +766,19 @@ elif page == "📈 Results":
                 fig_res.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_res, use_container_width=True)
 
-        # --- Metrics Explanation and Feature Importance Chart ---
+        # -------------------- EXPLANATION + FEATURE IMPORTANCE --------------------
         with explain_col:
             st.subheader("What the metrics mean")
             if task == "Classification":
-                st.markdown("- **Accuracy:** Overall fraction of correct predictions.")
-                st.markdown("- **Confusion Matrix:** Rows = true classes, Columns = predicted classes.")
-                st.markdown("- **Precision:** Of all predicted positives, how many were correct.")
-                st.markdown("- **Recall:** Of all actual positives, how many were found.")
-                st.markdown("- **F1-score:** Harmonic mean of precision and recall.")
+                st.markdown("- **Accuracy:** Overall correct predictions.")
+                st.markdown("- **Confusion Matrix:** True vs predicted classes.")
+                st.markdown("- **Precision:** Correct positives among predicted.")
+                st.markdown("- **Recall:** Found positives among actual.")
+                st.markdown("- **F1-score:** Balance of precision & recall.")
             else:
                 st.markdown("- **RMSE:** Root Mean Squared Error — lower is better.")
                 st.markdown("- **MAE:** Mean Absolute Error — average error magnitude.")
-                st.markdown("- **R²:** Proportion of variance explained by the model.")
+                st.markdown("- **R²:** Variance explained by the model.")
 
             st.markdown("---")
             st.subheader("Feature Importance Chart")
@@ -776,7 +800,8 @@ elif page == "📈 Results":
                 st.plotly_chart(fig_fi, use_container_width=True)
             else:
                 st.info("No feature importances available.")
-                        # --- Final Analysis Conclusion ---
+
+        # -------------------- FINAL CONCLUSION --------------------
         st.markdown("---")
         st.subheader("🧾 Final Analysis Conclusion")
 
@@ -798,7 +823,7 @@ elif page == "📈 Results":
                 st.markdown(
                     f"<div style='padding:14px;border-radius:10px;background-color:rgba(255,255,255,0.05);border-left:6px solid {color};'>"
                     f"<b>{verdict}</b><br><br>"
-                    f"Dominant predicted class: <b style='color:{color}'>{majority_class}</b> — indicating that most soils are in this fertility range."
+                    f"Dominant predicted class: <b style='color:{color}'>{majority_class}</b> — indicates most soils fall in this fertility range."
                     "</div>",
                     unsafe_allow_html=True
                 )
@@ -832,12 +857,13 @@ elif page == "📈 Results":
                     f"<div style='padding:14px;border-radius:10px;background-color:rgba(255,255,255,0.05);border-left:6px solid {color};'>"
                     f"<b>{verdict}</b><br><br>"
                     f"Predicted nutrient level trend: <b style='color:{color}'>{nutrient_status}</b> — "
-                    f"the overall soil nitrogen concentration is in this range."
+                    f"overall soil nitrogen concentration falls in this range."
                     "</div>",
                     unsafe_allow_html=True
                 )
             except Exception:
                 st.info("Unable to compute regression summary.")
+
 
 
 # --- end of Results section ---
@@ -885,6 +911,7 @@ elif page == "👤 About":
     st.markdown("---")
     st.markdown("all god to be glory")
     st.write("Developed for a capstone project.")
+
 
 
 
