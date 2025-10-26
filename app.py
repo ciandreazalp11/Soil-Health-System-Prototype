@@ -652,9 +652,21 @@ elif page == "📈 Results":
         with colA:
             st.write(f"**Model:** {results.get('model_name','Random Forest')}")
             st.write(f"**Features:** {', '.join(results.get('X_columns',[]))}")
-            if results.get("cv_summary"):
-                cv = results["cv_summary"]
-                st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+           if results.get("cv_summary"):
+    cv = results["cv_summary"]
+    cv_mean = cv['mean_cv']
+    cv_std = cv['std_cv']
+
+    # determine qualitative rating
+    if cv_mean >= 0.85:
+        remark = "🌿 Very Good"
+    elif cv_mean >= 0.70:
+        remark = "⚖️ Moderate"
+    else:
+        remark = "⚠️ Needs Improvement"
+
+    st.write(f"Cross-val mean: **{cv_mean:.3f}** (std: {cv_std:.3f}) — {remark}")
+
         with colB:
             if st.button("💾 Save Model"):
                 if st.session_state.get("model"):
@@ -881,5 +893,6 @@ elif page == "👤 About":
     st.markdown("---")
     st.markdown("all god to be glory")
     st.write("Developed for a capstone project.")
+
 
 
