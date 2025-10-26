@@ -435,21 +435,21 @@ elif page == "🤖 Modeling":
     else:
         df = st.session_state["df"].copy()
 
-        # ---- Mode toggle: checkbox (stateful) + visual switch that changes color ----
+        # ---- Mode toggle: visual switch (clickable) ----
         st.markdown("#### Model Mode")
-        # model_mode_checkbox True => Regression, False => Classification
-        default_checkbox = True if st.session_state.get("task_mode") == "Regression" else False
-        chk = st.checkbox("Switch to Regression mode", value=default_checkbox, key="model_mode_checkbox")
-        if chk:
-            st.session_state["task_mode"] = "Regression"
-            st.session_state["current_theme"] = theme_sakura
-        else:
-            st.session_state["task_mode"] = "Classification"
-            st.session_state["current_theme"] = theme_classification
-        apply_theme(st.session_state["current_theme"])
+        # The visual switch itself is now the control — click the button to toggle modes
+        if st.button(f"🔄 Switch to {'Regression' if st.session_state.get('task_mode','Classification')=='Classification' else 'Classification'} Mode"):
+            if st.session_state.get("task_mode","Classification") == "Classification":
+                st.session_state["task_mode"] = "Regression"
+                st.session_state["current_theme"] = theme_sakura
+            else:
+                st.session_state["task_mode"] = "Classification"
+                st.session_state["current_theme"] = theme_classification
+            apply_theme(st.session_state["current_theme"])
+            st.experimental_rerun()
 
-        # Visual switch (reflects checkbox state) — purely visual
-        switch_color = "#ff8aa2" if st.session_state["task_mode"] == "Regression" else "#81c784"
+        # Visual switch (reflects current state) — now purely visual but shows real state
+        switch_color = "#ff8aa2" if st.session_state.get("task_mode","Classification") == "Regression" else "#81c784"
         st.markdown(f"""
         <style>
         .fake-switch {{
@@ -472,12 +472,13 @@ elif page == "🤖 Modeling":
         </style>
         <div style="display:flex;align-items:center;margin-bottom:10px;">
           <div class="fake-switch">
-            <div class="fake-knob {'knob-right' if st.session_state['task_mode']=='Regression' else 'knob-left'}"></div>
+            <div class="fake-knob {'knob-right' if st.session_state.get('task_mode','Classification')=='Regression' else 'knob-left'}"></div>
           </div>
-          <div class="switch-label">{'Regression' if st.session_state['task_mode']=='Regression' else 'Classification'}</div>
+          <div class="switch-label">{'Regression' if st.session_state.get('task_mode','Classification')=='Regression' else 'Classification'}</div>
         </div>
         """, unsafe_allow_html=True)
 
+        st.markdown("---")
         st.markdown("---")
 
         # prepare target and X depending on mode
@@ -516,7 +517,7 @@ elif page == "🤖 Modeling":
             X_train, X_test, y_train, y_test = train_test_split(X_scaled_df, y, test_size=test_size/100, random_state=42)
 
             if st.button("🚀 Train Model"):
-                with st.spinner("Training Random Forest..."):
+                with st.spinner("Training Random Forest."):
                     time.sleep(0.25)
                     if st.session_state["task_mode"] == "Classification":
                         model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1)
@@ -584,15 +585,16 @@ elif page == "📊 Visualization":
         if not param_cols:
             st.warning("No recognized parameter columns found. Required example columns: pH, Nitrogen, Phosphorus, Potassium, Moisture, Organic Matter")
         else:
-            # grid of hist + box for each
-            for col in param_cols:
-                fig = px.histogram(df, x=col, nbins=30, marginal="box", title=f"Distribution: {col}", color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
+            # Show a single parameter distribution at a time (selector)
+            selected_param = st.selectbox("Choose parameter to view:", param_cols)
+            if selected_param:
+                fig = px.histogram(df, x=selected_param, nbins=30, marginal="box", title=f"Distribution: {selected_param}", color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
                 fig.update_layout(template="plotly_dark")
                 st.plotly_chart(fig, use_container_width=True)
-                # small explanation
-                st.markdown(f"<div style='font-size:13px;color:rgba(255,255,255,0.85)'>This histogram shows the distribution of **{col}** across samples. Use the median and spread to assess central tendency and variability.</div>", unsafe_allow_html=True)
-                st.markdown("---")
-
+                st.markdown(f"<div style='font-size:13px;color:rgba(255,255,255,0.85)'>This histogram shows the distribution of **{selected_param}** across samples. Use the median and spread to assess central tendency and variability.</div>", unsafe_allow_html=True)
+            else:
+                st.warning("No parameter selected.")
+            
             # Correlation heatmap
             st.subheader("Correlation Matrix")
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -757,12 +759,14 @@ elif page == "📈 Results":
                 st.markdown("- **MAE:** Mean Absolute Error — average magnitude of errors.")
                 st.markdown("- **R²:** Proportion of variance explained by the model (1 is perfect).")
             st.markdown("---")
-            st.markdown("**Feature importances** (Top 5)")
+            st.markdown("**Feature importances** (Top 10)")
             fi = results.get("feature_importances", [])
             feat = results.get("X_columns", [])
             if fi and feat:
-                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False).head(5)
-                st.table(df_fi.reset_index(drop=True))
+                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False).head(10)
+                fig_fi = px.bar(df_fi, x="importance", y="feature", orientation="h", title="Feature Importance", color="importance", color_continuous_scale=px.colors.sequential.Viridis)
+                fig_fi.update_layout(template="plotly_dark", height=360)
+                st.plotly_chart(fig_fi, use_container_width=True)
             else:
                 st.info("No feature importances available.")
 
