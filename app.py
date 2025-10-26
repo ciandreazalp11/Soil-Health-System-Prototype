@@ -634,6 +634,8 @@ elif page == "📊 Visualization":
                     st.markdown(f"<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Scatter showing relationship of {feat} against Nitrogen. Trendline (OLS) included if statsmodels is available.</div>", unsafe_allow_html=True)
 
 # ----------------- RESULTS -----------------
+# --- inside the "📈 Results" section (replace from line ~1600 onwards in your file) ---
+
 elif page == "📈 Results":
     st.title("📈 Model Results & Interpretation")
     if not st.session_state.get("results"):
@@ -646,7 +648,7 @@ elif page == "📈 Results":
 
         # Model summary card
         st.subheader("Model Summary")
-        colA, colB = st.columns([3,2])
+        colA, colB = st.columns([3, 2])
         with colA:
             st.write(f"**Model:** {results.get('model_name','Random Forest')}")
             st.write(f"**Features:** {', '.join(results.get('X_columns',[]))}")
@@ -669,49 +671,50 @@ elif page == "📈 Results":
 
         st.markdown("---")
 
-        # Two-column metrics + explanations (Option 1 you chose)
-        metrics_col, explain_col = st.columns([2,1])
+        # Two-column layout
+        metrics_col, explain_col = st.columns([2, 1])
         with metrics_col:
             st.subheader("Performance Metrics")
             if task == "Classification":
-                # Accuracy metric
                 try:
                     acc = accuracy_score(y_test, y_pred)
                     st.metric("Accuracy", f"{acc:.3f}")
                 except Exception:
                     st.write("Accuracy N/A")
-                # confusion matrix
+
                 st.markdown("**Confusion Matrix**")
                 try:
-                    cm = confusion_matrix(y_test, y_pred, labels=['Low','Moderate','High'])
+                    cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Moderate', 'High'])
                     fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Confusion Matrix (Low / Moderate / High)")
                     fig_cm.update_layout(template="plotly_dark", height=350)
                     st.plotly_chart(fig_cm, use_container_width=True)
                 except Exception:
                     st.write("Confusion matrix not available")
-                # classification report as table
-                st.markdown("#### 📊 Classification Report (Detailed)")
+
+                # --- Classification Report (Tabular) ---
+                st.markdown("#### 📋 Classification Report (Detailed)")
                 try:
                     rep = classification_report(y_test, y_pred, output_dict=True)
                     rep_df = pd.DataFrame(rep).transpose().reset_index()
-                    rep_df.rename(columns={"index":"Class"}, inplace=True)
-                    cols_order = ["Class","precision","recall","f1-score","support"]
-                    # ensure columns present
+                    rep_df.rename(columns={"index": "Class"}, inplace=True)
+                    cols_order = ["Class", "precision", "recall", "f1-score", "support"]
                     rep_df = rep_df[[c for c in cols_order if c in rep_df.columns]]
-                    # style and display
-                    styled = rep_df.style.format({
-                        "precision":"{:.2f}",
-                        "recall":"{:.2f}",
-                        "f1-score":"{:.2f}",
-                        "support":"{:.0f}"
-                    }).background_gradient(subset=["f1-score"] if "f1-score" in rep_df.columns else None, cmap="Greens")
-                    st.dataframe(styled, use_container_width=True)
-                    st.markdown("<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Precision/Recall/F1 per class. Support = number of samples.</div>", unsafe_allow_html=True)
+
+                    st.dataframe(
+                        rep_df.style.format({
+                            "precision": "{:.2f}",
+                            "recall": "{:.2f}",
+                            "f1-score": "{:.2f}",
+                            "support": "{:.0f}"
+                        }).background_gradient(
+                            subset=["f1-score"], cmap="Greens"
+                        ),
+                        use_container_width=True
+                    )
                 except Exception as e:
-                    st.text(classification_report(y_test,y_pred))
+                    st.text(classification_report(y_test, y_pred))
 
             else:
-                # regression metrics
                 mse = mean_squared_error(y_test, y_pred)
                 rmse = np.sqrt(mse)
                 mae = mean_absolute_error(y_test, y_pred)
@@ -720,51 +723,58 @@ elif page == "📈 Results":
                 st.metric("MAE", f"{mae:.3f}")
                 st.metric("R²", f"{r2:.3f}")
 
-                # actual vs predicted
                 df_res = pd.DataFrame({"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred})
                 st.markdown("**Sample predictions**")
                 st.dataframe(df_res.head(10), use_container_width=True)
-                # scatter actual vs pred with trendline if possible
-                st.markdown("**Actual vs Predicted**")
-                try:
-                    fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
-                                      title="Actual vs Predicted Nitrogen (Model Predictions)")
-                    fig1.update_layout(template="plotly_dark")
-                    st.plotly_chart(fig1, use_container_width=True)
-                except Exception:
-                    # fallback without trendline
-                    fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen",
-                                      title="Actual vs Predicted Nitrogen (no trendline available)")
-                    fig1.update_layout(template="plotly_dark")
-                    st.plotly_chart(fig1, use_container_width=True)
 
-                # residual distribution
+                st.markdown("**Actual vs Predicted**")
+                fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
+                                  title="Actual vs Predicted Nitrogen (Model Predictions)")
+                fig1.update_layout(template="plotly_dark")
+                st.plotly_chart(fig1, use_container_width=True)
+
                 df_res["residual"] = df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
                 fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
                 fig_res.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_res, use_container_width=True)
 
+        # --- Metrics Explanation and Feature Importance Chart ---
         with explain_col:
             st.subheader("What the metrics mean")
             if task == "Classification":
                 st.markdown("- **Accuracy:** Overall fraction of correct predictions.")
                 st.markdown("- **Confusion Matrix:** Rows = true classes, Columns = predicted classes.")
-                st.markdown("- **Precision:** Of all predicted positive, how many were actually positive.")
-                st.markdown("- **Recall:** Of all actual positive samples, how many were found.")
-                st.markdown("- **F1-score:** Harmonic mean of precision and recall; balanced measure.")
+                st.markdown("- **Precision:** Of all predicted positives, how many were correct.")
+                st.markdown("- **Recall:** Of all actual positives, how many were found.")
+                st.markdown("- **F1-score:** Harmonic mean of precision and recall.")
             else:
-                st.markdown("- **RMSE:** Root Mean Squared Error — lower is better; same units as target.")
-                st.markdown("- **MAE:** Mean Absolute Error — average magnitude of errors.")
-                st.markdown("- **R²:** Proportion of variance explained by the model (1 is perfect).")
+                st.markdown("- **RMSE:** Root Mean Squared Error — lower is better.")
+                st.markdown("- **MAE:** Mean Absolute Error — average error magnitude.")
+                st.markdown("- **R²:** Proportion of variance explained by the model.")
+
             st.markdown("---")
-            st.markdown("**Feature importances** (Top 5)")
+            st.subheader("Feature Importance Chart")
+
             fi = results.get("feature_importances", [])
             feat = results.get("X_columns", [])
             if fi and feat:
-                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False).head(5)
-                st.table(df_fi.reset_index(drop=True))
+                df_fi = pd.DataFrame({"Feature": feat, "Importance": fi}).sort_values("Importance", ascending=True)
+                fig_fi = px.bar(
+                    df_fi,
+                    x="Importance",
+                    y="Feature",
+                    orientation="h",
+                    title="Feature Importance (Random Forest)",
+                    color="Importance",
+                    color_continuous_scale="Greens"
+                )
+                fig_fi.update_layout(template="plotly_dark", height=400)
+                st.plotly_chart(fig_fi, use_container_width=True)
             else:
                 st.info("No feature importances available.")
+
+# --- end of Results section ---
+
 
 # ----------------- INSIGHTS -----------------
 elif page == "🌿 Insights":
@@ -808,3 +818,4 @@ elif page == "👤 About":
     st.markdown("---")
     st.markdown("all god to be glory")
     st.write("Developed for a capstone project.")
+
