@@ -16,6 +16,55 @@ from PIL import Image
 import io as sysio
 import os
 
+# ----------------- THEMES -----------------
+theme_classification = {
+    "background_main": "linear-gradient(120deg, #0f2c2c 0%, #1a4141 40%, #0e2a2a 100%)",
+    "sidebar_bg": "rgba(15, 30, 30, 0.95)",
+    "primary_color": "#81c784",
+    "secondary_color": "#a5d6a7",
+    "button_gradient": "linear-gradient(90deg, #66bb6a, #4caf50)",
+    "button_text": "#0c1d1d",
+    "header_glow_color_1": "#81c784",
+    "header_glow_color_2": "#4caf50",
+    "menu_icon_color": "#81c784",
+    "nav_link_color": "#e0ffe0",
+    "nav_link_selected_bg": "#4caf50",
+    "info_bg": "#214242",
+    "info_border": "#4caf50",
+    "success_bg": "#2e5c2e",
+    "success_border": "#81c784",
+    "warning_bg": "#5c502e",
+    "warning_border": "#dcd380",
+    "error_bg": "#5c2e2e",
+    "error_border": "#ef9a9a",
+    "text_color": "#e0ffe0",
+    "title_color": "#a5d6a7",
+}
+
+theme_sakura = {
+    "background_main": "linear-gradient(120deg, #2b062b 0%, #3b0a3b 50%, #501347 100%)",
+    "sidebar_bg": "linear-gradient(180deg, rgba(30,8,30,0.95), rgba(45,10,45,0.95))",
+    "primary_color": "#ff8aa2",
+    "secondary_color": "#ffc1d3",
+    "button_gradient": "linear-gradient(90deg, #ff8aa2, #ff3b70)",
+    "button_text": "#1f0f16",
+    "header_glow_color_1": "#ff93b0",
+    "header_glow_color_2": "#ff3b70",
+    "menu_icon_color": "#ff93b0",
+    "nav_link_color": "#ffd6e0",
+    "nav_link_selected_bg": "#ff3b70",
+    "info_bg": "#40132a",
+    "info_border": "#ff93b0",
+    "success_bg": "#3a1b2a",
+    "success_border": "#ff93b0",
+    "warning_bg": "#3b2530",
+    "warning_border": "#ffb3b3",
+    "error_bg": "#3a1a22",
+    "error_border": "#ff9aa3",
+    "text_color": "#ffeef8",
+    "title_color": "#ffd6e0",
+}
+
 # ----------------- Initialize Theme -----------------
 if "current_theme" not in st.session_state:
     # Set default theme if not present
