@@ -16,7 +16,26 @@ from PIL import Image
 import io as sysio
 import os
 
-# page config
+# ----------------- Initialize Theme -----------------
+if "current_theme" not in st.session_state:
+    # Set default theme if not present
+    st.session_state["current_theme"] = theme_classification  # Or your preferred default theme
+
+# Ensure the default values are set for other session state variables
+if "df" not in st.session_state:
+    st.session_state["df"] = None
+if "results" not in st.session_state:
+    st.session_state["results"] = None
+if "model" not in st.session_state:
+    st.session_state["model"] = None
+if "scaler" not in st.session_state:
+    st.session_state["scaler"] = None
+if "task_mode" not in st.session_state:
+    st.session_state["task_mode"] = "Classification"  # default task mode
+if "trained_on_features" not in st.session_state:
+    st.session_state["trained_on_features"] = None
+
+# ----------------- page config -----------------
 st.set_page_config(
     page_title="Machine Learning-Driven Soil Analysis for Sustainable Agriculture System",
     layout="wide",
