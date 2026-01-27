@@ -1,30 +1,170 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
+import folium
+from folium.plugins import HeatMap, FastMarkerCluster
+from streamlit_folium import st_folium
 from streamlit_option_menu import option_menu
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import accuracy_score, classification_report, mean_squared_error, r2_score, confusion_matrix, mean_absolute_error
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    mean_squared_error,
+    r2_score,
+    confusion_matrix,
+    mean_absolute_error,
+)
+from sklearn.inspection import permutation_importance
+from sklearn.cluster import KMeans
 from io import BytesIO
 import joblib
 import time
 import base64
 from PIL import Image
-import io as sysio
-import os
+import warnings
+import re
 
-# page config
+warnings.filterwarnings("ignore", category=UserWarning)
+
+
+# =========================
+# Land-only filter (Mindanao) for Folium map
+# Uses Natural Earth 10m land polygons (downloaded once + cached).
+# Falls back to a conservative bounding-box filter if geopandas/shapely isn't available.
+# =========================
+
+import os
+import io
+import zipfile
+from pathlib import Path
+
+# Optional geo stack: used ONLY to hide offshore points on maps (no effect on modeling).
+try:
+    from shapely.geometry import Point, box, shape as _shape
+    from shapely.ops import unary_union
+    from shapely.prepared import prep
+except Exception:
+    Point = box = _shape = unary_union = prep = None
+
+try:
+    import geopandas as gpd
+except Exception:
+    gpd = None
+
+@st.cache_resource
+def _get_mindanao_land_polygon():
+    """Return a prepared polygon approximating Mindanao LAND area only.
+
+    Strategy (in order):
+    1) Use GeoPandas + Shapely (fast + robust) if available.
+    2) If GeoPandas is unavailable but Shapely is available, read the Natural Earth shapefile via `shapefile` (pyshp).
+    3) If geo libs aren't available, return None (caller falls back to a conservative bbox filter).
+
+    The Natural Earth 10m land dataset is downloaded once and cached locally.
+    """
+    if box is None or prep is None:
+        return None
+
+    cache_dir = Path.home() / ".cache" / "soil_health_app"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    zip_path = cache_dir / "ne_10m_land.zip"
+    shp_path = cache_dir / "ne_10m_land.shp"
+
+    if not shp_path.exists():
+        # Download Natural Earth 10m land (public domain)
+        import requests  # local import to avoid hard dependency at import time
+        url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip"
+        r = requests.get(url, timeout=60)
+        r.raise_for_status()
+        zip_path.write_bytes(r.content)
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            zf.extractall(cache_dir)
+
+    # Mindanao broad bbox (includes some sea; removed by land polygon)
+    mindanao_bbox = box(121.0, 4.0, 128.5, 11.5)
+
+    geoms = []
+
+    # --- Preferred path: GeoPandas if available ---
+    if gpd is not None:
+        land = gpd.read_file(str(shp_path))
+        clipped = land[land.intersects(mindanao_bbox)].copy()
+        if not clipped.empty:
+            geoms = list(clipped.geometry)
+
+    # --- Fallback: pyshp (no GeoPandas needed) ---
+    if (not geoms) and (_shape is not None):
+        try:
+            import shapefile as pyshp  # pyshp package (import name: shapefile)
+            sf = pyshp.Reader(str(shp_path))
+            minx, miny, maxx, maxy = mindanao_bbox.bounds
+
+            for sr in sf.shapeRecords():
+                # quick bbox reject first (fast)
+                bx0, by0, bx1, by1 = sr.shape.bbox
+                if (bx1 < minx) or (bx0 > maxx) or (by1 < miny) or (by0 > maxy):
+                    continue
+                try:
+                    geom = _shape(sr.shape.__geo_interface__)
+                except Exception:
+                    continue
+                if geom.intersects(mindanao_bbox):
+                    geoms.append(geom)
+        except Exception:
+            geoms = []
+
+    if not geoms:
+        return None
+
+    geom = unary_union(geoms).intersection(mindanao_bbox)
+
+    # Keep largest polygon piece (main landmass in this bbox)
+    if getattr(geom, "geom_type", None) == "MultiPolygon":
+        geom = max(geom.geoms, key=lambda g: g.area)
+
+    return prep(geom)
+
+def _filter_mindanao_land_only(df_in: pd.DataFrame) -> pd.DataFrame:
+    """Hide points that are NOT on Mindanao land (automatic sea removal).
+    Requires Latitude/Longitude columns.
+    Falls back to conservative bbox if land polygon isn't available.
+    """
+    df0 = df_in.dropna(subset=["Latitude", "Longitude"]).copy()
+
+    # Fast pre-filter (keeps runtime low even on big datasets)
+    df0 = df0[
+        (df0["Latitude"].between(4.0, 11.5)) &
+        (df0["Longitude"].between(121.0, 128.5))
+    ]
+    if df0.empty:
+        return df0
+
+    prepared_land = _get_mindanao_land_polygon()
+    if prepared_land is None or Point is None:
+        # Fallback: tight "land-safe" bbox (may remove some coastal land points)
+        return df0[
+            (df0["Latitude"].between(5.0, 10.5)) &
+            (df0["Longitude"].between(121.5, 127.3))
+        ]
+
+    # Strict point-in-land test
+    keep_mask = []
+    for lat, lon in zip(df0["Latitude"].astype(float), df0["Longitude"].astype(float)):
+        keep_mask.append(prepared_land.contains(Point(lon, lat)))
+
+    return df0.loc[keep_mask]
+
 st.set_page_config(
     page_title="Machine Learning-Driven Soil Analysis for Sustainable Agriculture System",
     layout="wide",
-    page_icon="🌿"
+    page_icon="🌿",
 )
 
-# ----------------- THEMES -----------------
+# === THEMES (UNCHANGED) ===
 theme_classification = {
     "background_main": "linear-gradient(120deg, #0f2c2c 0%, #1a4141 40%, #0e2a2a 100%)",
     "sidebar_bg": "rgba(15, 30, 30, 0.95)",
@@ -73,7 +213,7 @@ theme_sakura = {
     "title_color": "#ffd6e0",
 }
 
-# Session state defaults
+# === SESSION STATE ===
 if "current_theme" not in st.session_state:
     st.session_state["current_theme"] = theme_classification
 if "df" not in st.session_state:
@@ -85,124 +225,120 @@ if "model" not in st.session_state:
 if "scaler" not in st.session_state:
     st.session_state["scaler"] = None
 if "task_mode" not in st.session_state:
-    st.session_state["task_mode"] = "Classification"  # default
+    st.session_state["task_mode"] = "Classification"
 if "trained_on_features" not in st.session_state:
     st.session_state["trained_on_features"] = None
-# profile images stored in session as base64
 if "profile_andre" not in st.session_state:
     st.session_state["profile_andre"] = None
 if "profile_rica" not in st.session_state:
     st.session_state["profile_rica"] = None
-
-# UI navigation override used by "Proceed" buttons on Home
 if "page_override" not in st.session_state:
     st.session_state["page_override"] = None
 if "last_sidebar_selected" not in st.session_state:
     st.session_state["last_sidebar_selected"] = None
+if "location_tag" not in st.session_state:
+    st.session_state["location_tag"] = ""
 
-# ----------------- THEME APPLIER + BACKGROUND -----------------
-def apply_theme(theme):
+# === APPLY THEME (FIXED, CLEAN, WORKING) ===
+
+# === STYLE INJECTION HELPER ===
+def inject_style(css_html: str) -> None:
+    import streamlit as st
+    # Why: without this flag, <style> prints as text
+    st.markdown(css_html, unsafe_allow_html=True)
+
+def apply_theme(theme: dict) -> None:
+    """Design-only: 3D pastel wave background; preserves original palettes."""
+    import streamlit as st
+
+    base_bg   = theme.get("background_main", "")
+    sidebar   = theme.get("sidebar_bg", "")
+    title_col = theme.get("title_color", "#ffffff")
+    text_col  = theme.get("text_color", "#ffffff")
+    btn_grad  = theme.get("button_gradient", "linear-gradient(90deg,#66bb6a,#4caf50)")
+    btn_text  = theme.get("button_text", "#0c1d1d")
+
+    greenish = "#4caf50" in btn_grad or "#66bb6a" in btn_grad or "#0f2c2c" in base_bg
+    if greenish:
+        spot1, spot2, spot3 = "rgba(210,255,240,.45)", "rgba(175,240,220,.35)", "rgba(230,255,250,.30)"
+    else:
+        spot1, spot2, spot3 = "rgba(255,205,225,.45)", "rgba(255,185,200,.35)", "rgba(245,220,255,.30)"
+
     css = f"""
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-    /* Main app + background decorative shapes */
-    .stApp {{
-      font-family: 'Montserrat', sans-serif;
-      color:{theme['text_color']};
-      min-height:100vh;
-      background: {theme['background_main']};
-      background-attachment: fixed;
-      position: relative;
-      overflow: hidden;
-    }}
-    /* soft decorative blobs in background */
-    .bg-decor {{
-      position: absolute;
-      right: -8%;
-      top: -12%;
-      width: 55vmax;
-      height: 55vmax;
-      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.03), transparent 10%),
-                  radial-gradient(circle at 80% 80%, rgba(255,255,255,0.02), transparent 25%);
-      transform: rotate(12deg) scale(1.1);
-      filter: blur(36px);
-      z-index: 0;
-      pointer-events: none;
-    }}
-    section[data-testid="stSidebar"] {{
-      background: {theme['sidebar_bg']} !important;
-      border-radius:12px;
-      padding:18px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
-      z-index: 2;
-    }}
-    .sidebar-header {{
-      padding: 12px;
-      border-radius: 10px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-      margin-bottom: 12px;
-      border: 1px solid rgba(255,255,255,0.03);
-    }}
-    .sidebar-title {{ font-family: 'Playfair Display', serif; color:{theme['title_color']}; margin:0; }}
-    .sidebar-sub {{ font-size:12px; color:{theme['secondary_color']}; margin-top:6px; opacity:0.95; }}
-    div[data-testid="stSidebarNav"] a {{
-      color:{theme['nav_link_color']} !important;
-      border-radius:8px;
-      padding:10px 12px!important;
-      margin-bottom:6px!important;
-      display:block!important;
-      transition: all .12s;
-      font-size:15px!important;
-    }}
-    div[data-testid="stSidebarNav"] a:hover {{ background: rgba(255,255,255,0.03) !important; transform: translateX(6px); }}
-    div[data-testid="stSidebarNav"] a[aria-current="page"] {{ background:{theme['nav_link_selected_bg']}!important; color:#0b0b0b!important; box-shadow:0 6px 16px rgba(0,0,0,0.25); }}
-    h1,h2,h3,h4,h5,h6 {{ color:{theme['title_color']}; font-family: 'Playfair Display', serif; z-index: 3; }}
-    .stButton button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; border-radius:10px; padding:0.45rem 0.9rem; font-weight:700; }}
-    .stDownloadButton>button {{ background: {theme['button_gradient']} !important; color:{theme['button_text']} !important; }}
-    .profile-circle {{
-      width:120px;
-      height:120px;
-      border-radius:50%;
-      display:inline-block;
-      vertical-align: middle;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 18px rgba(0,0,0,0.35);
-      background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(0,0,0,0.04));
-      border: 4px solid rgba(255,255,255,0.04);
-      overflow:hidden;
-      text-align:center;
-      line-height:120px;
-    }}
-    .profile-holo {{
-      background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
-      padding:6px;
-      border-radius:50%;
-      display:inline-block;
-    }}
-    .profile-name {{ margin-top:8px; font-weight:700; color:{theme['secondary_color']}; }}
-    .uploader-hint {{ font-size:12px; color:{theme['text_color']}; opacity:0.7; }}
-    /* small form tweaks */
-    div[data-testid="stToolbar"] {{ background: transparent; }}
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-    st.markdown('<div class="bg-decor"></div>', unsafe_allow_html=True)
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+<style>
+.stApp {{
+  font-family:'Montserrat',sans-serif!important;
+  color:{text_col};
+  min-height:100vh;
+  background:{base_bg};
+  background-attachment:fixed;
+  position:relative; overflow:hidden;
+}}
+h1,h2,h3,h4,h5,h6 {{
+  font-family:'Playfair Display',serif!important;
+  color:{title_col}; font-weight:700!important;
+  text-shadow:0 2px 4px rgba(255,255,255,.35);
+  animation:ccFloat 3s ease-in-out infinite;
+}}
+@keyframes ccFloat {{ 0%,100%{{transform:translateY(0)}} 50%{{transform:translateY(-2px)}} }}
+.stApp::before,.stApp::after {{
+  content:""; position:absolute; inset:-30%;
+  background:
+    radial-gradient(62rem 62rem at 18% 28%, {spot1} 0%, transparent 68%),
+    radial-gradient(54rem 54rem at 82% 38%, {spot2} 0%, transparent 70%),
+    radial-gradient(58rem 58rem at 40% 82%, {spot3} 0%, transparent 72%);
+  mix-blend-mode: screen; pointer-events:none; z-index:0;
+  opacity:.55; filter:blur(.3px); animation:ccWaveA 26s linear infinite;
+}}
+.stApp::after {{ opacity:.38; animation:ccWaveB 32s linear infinite reverse; }}
+@keyframes ccWaveA {{
+  0%{{transform:translate3d(0,0,0) rotate(0deg) scale(1.0)}}
+  50%{{transform:translate3d(-4%,-3%,0) rotate(180deg) scale(1.03)}}
+  100%{{transform:translate3d(-8%,-6%,0) rotate(360deg) scale(1.06)}}
+}}
+@keyframes ccWaveB {{
+  0%{{transform:translate3d(0,0,0) rotate(0deg) scale(1.0)}}
+  50%{{transform:translate3d(5%,4%,0) rotate(-180deg) scale(1.02)}}
+  100%{{transform:translate3d(9%,8%,0) rotate(-360deg) scale(1.05)}}
+}}
+section[data-testid="stSidebar"] {{
+  background:{sidebar}!important; height:100vh!important;
+  backdrop-filter:blur(6px); border-right:1px solid rgba(255,255,255,.18);
+  z-index:1!important;
+}}
+[data-testid="stAppViewContainer"], .main {{ position:relative!important; z-index:2!important; }}
+[data-testid="stJson"], [data-testid="stDataFrame"], .stMetric, .element-container .stAlert {{
+  background:rgba(255,255,255,.40)!important; border-radius:12px!important;
+  border:1px solid rgba(255,255,255,.22)!important; backdrop-filter:blur(8px)!important;
+  box-shadow:0 2px 12px rgba(0,0,0,.06)!important;
+}}
+.stButton>button, .stDownloadButton>button {{
+  background:{btn_grad}!important; color:{btn_text}!important;
+  border-radius:10px!important; padding:.6rem 1.2rem!important;
+  transition:.15s; box-shadow:0 4px 18px rgba(0,0,0,.15);
+}}
+.stButton>button:hover, .stDownloadButton>button:hover {{
+  transform:translateY(-1px); box-shadow:0 10px 28px rgba(0,0,0,.22);
+}}
+</style>
+"""
+    inject_style(css)
+    inject_style('<div class="bg-decor" style="display:none"></div>')
 
 apply_theme(st.session_state["current_theme"])
 
-# ----------------- SIDEBAR (modeling first) -----------------
+# === SIDEBAR (UNCHANGED LAYOUT) ===
 with st.sidebar:
-    st.markdown(
-        f"""
+    st.markdown(f"""
         <div class="sidebar-header">
           <h2 class="sidebar-title">🌱 Soil Health System</h2>
           <div class="sidebar-sub">ML-Driven Soil Analysis</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.write("---")
-
-    # note: Modeling is first now
     selected = option_menu(
         None,
         ["🏠 Home", "🤖 Modeling", "📊 Visualization", "📈 Results", "🌿 Insights", "👤 About"],
@@ -211,32 +347,127 @@ with st.sidebar:
         default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": st.session_state["current_theme"]["menu_icon_color"], "font-size": "18px"},
-            "nav-link": {"font-size": "15px", "text-align": "left", "margin": "0px"},
-            "nav-link-selected": {"background-color": st.session_state["current_theme"]["nav_link_selected_bg"]},
-        }
+            "icon": {
+                "color": st.session_state["current_theme"]["menu_icon_color"],
+                "font-size": "18px",
+            },
+            "nav-link": {
+                "font-size": "15px",
+                "text-align": "left",
+                "margin": "0px",
+            },
+            "nav-link-selected": {
+                "background-color": st.session_state["current_theme"][
+                    "nav_link_selected_bg"
+                ]
+            },
+        },
     )
     st.write("---")
-    st.markdown(f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>", unsafe_allow_html=True)
-
-    # update last selection to clear overrides if user uses sidebar
+    st.markdown(
+        f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>",
+        unsafe_allow_html=True,
+    )
     if st.session_state["last_sidebar_selected"] != selected:
         st.session_state["page_override"] = None
         st.session_state["last_sidebar_selected"] = selected
 
-# determine page (sidebar selection or override from Home "Proceed" buttons)
-page = st.session_state["page_override"] if st.session_state["page_override"] else selected
+page = (
+    st.session_state["page_override"]
+    if st.session_state["page_override"]
+    else selected
+)
 
-# ----------------- COMMON SETTINGS -----------------
+# === COLUMN MAPPING & BASE HELPERS ===
 column_mapping = {
-    'pH': ['pH', 'ph', 'Soil_pH'],
-    'Nitrogen': ['Nitrogen', 'N', 'Nitrogen_Level'],
-    'Phosphorus': ['Phosphorus', 'P'],
-    'Potassium': ['Potassium', 'K'],
-    'Moisture': ['Moisture', 'Soil_Moisture'],
-    'Organic Matter': ['Organic Matter', 'OM', 'oc']
+    "pH": [
+        "pH",
+        "ph",
+        "soil_pH",
+        "soil ph",
+        "soilph",
+    ],
+    "Nitrogen": [
+        "Nitrogen",
+        "nitrogen",
+        "n",
+        "nitrogen_level",
+        "total_nitrogen",
+    ],
+    "Phosphorus": [
+        "Phosphorus",
+        "phosphorus",
+        "p",
+        "p2o5",
+    ],
+    "Potassium": [
+        "Potassium",
+        "potassium",
+        "k",
+        "k2o",
+    ],
+    "Moisture": [
+        "Moisture",
+        "moisture",
+        "soil_moisture",
+        "moisture_index",
+        "moisture content",
+        "moisturecontent",
+    ],
+    "Organic Matter": [
+        "Organic Matter",
+        "organic matter",
+        "organic_matter",
+        "organicmatter",
+        "om",
+        "oc",
+        "orgmatter",
+        "organic carbon",
+        "organic_carbon",
+        "organiccarbon",
+    ],
+    "Latitude": [
+        "Latitude",
+        "latitude",
+        "lat",
+    ],
+    "Longitude": [
+        "Longitude",
+        "longitude",
+        "lon",
+        "lng",
+        "longitude_1",
+        "longitude_2",
+    ],
+    "Fertility_Level": [
+        "Fertility_Level",
+        "fertility_level",
+        "fertility class",
+        "fertility_class",
+        "fertilityclass",
+    ],
+    "Province": [
+        "Province",
+        "province",
+        "prov",
+    ],
 }
-required_columns = list(column_mapping.keys())
+
+required_columns = [
+    "pH",
+    "Nitrogen",
+    "Phosphorus",
+    "Potassium",
+    "Moisture",
+    "Organic Matter",
+]
+
+
+def normalize_col_name(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]", "", str(name).lower())
+    s = re.sub(r"\d+$", "", s)
+    return s
+
 
 def safe_to_numeric_columns(df, cols):
     numeric_found = []
@@ -246,109 +477,300 @@ def safe_to_numeric_columns(df, cols):
             numeric_found.append(c)
     return numeric_found
 
-def download_df_button(df, filename="final_preprocessed_soil_dataset.csv", label="⬇️ Download Cleaned & Preprocessed Data"):
+
+def download_df_button(
+    df,
+    filename="final_preprocessed_soil_dataset.csv",
+    label="⬇️ Download Cleaned & Preprocessed Data",
+):
     buf = BytesIO()
     df.to_csv(buf, index=False)
     buf.seek(0)
     st.download_button(label=label, data=buf, file_name=filename, mime="text/csv")
 
+
 def create_fertility_label(df, col="Nitrogen", q=3):
-    labels = ['Low', 'Moderate', 'High']
+    labels = ["Low", "Moderate", "High"]
     try:
-        fert = pd.qcut(df[col], q=q, labels=labels, duplicates='drop')
+        fert = pd.qcut(df[col], q=q, labels=labels, duplicates="drop")
         if fert.nunique() < 3:
             fert = pd.cut(df[col], bins=3, labels=labels)
     except Exception:
         fert = pd.cut(df[col], bins=3, labels=labels, include_lowest=True)
     return fert.astype(str)
 
+
 def interpret_label(label):
     l = str(label).lower()
     if l in ["high", "good", "healthy", "3", "2.0"]:
         return ("Good", "green", "✅ Nutrients are balanced. Ideal for most crops.")
     if l in ["moderate", "medium", "2", "1.0"]:
-        return ("Moderate", "orange", "⚠️ Some nutrient imbalance. Consider minor adjustments.")
+        return (
+            "Moderate",
+            "orange",
+            "⚠️ Some nutrient imbalance. Consider minor adjustments.",
+        )
     return ("Poor", "red", "🚫 Deficient or problematic — take corrective action.")
 
-# ----------------- PROFILE / AVATAR HELPERS -----------------
-def pil_to_base64(img: Image.Image, fmt="PNG"):
-    buf = sysio.BytesIO()
-    img.save(buf, format=fmt)
-    b = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return b
 
-def render_profile(name, session_key, upload_key):
-    """
-    Kept signature same. Displays avatar from assets folder or placeholder.
-    uploaders removed per earlier instruction.
-    """
-    st.markdown("<div style='display:flex;flex-direction:column;align-items:center;text-align:center;'>", unsafe_allow_html=True)
-    image_filename = None
-    if "Andre" in name:
-        image_filename = "andre.png"
-    elif "Rica" in name:
-        image_filename = "rica.png"
+# === CROP PROFILES ===
+CROP_PROFILES = {
+    "Rice": {
+        "pH": (5.5, 6.5),
+        "Nitrogen": (0.25, 0.8),
+        "Phosphorus": (15, 40),
+        "Potassium": (80, 200),
+        "Moisture": (40, 80),
+        "Organic Matter": (2.0, 6.0),
+    },
+    "Corn (Maize)": {
+        "pH": (5.8, 7.0),
+        "Nitrogen": (0.3, 1.2),
+        "Phosphorus": (10, 40),
+        "Potassium": (100, 250),
+        "Moisture": (20, 60),
+        "Organic Matter": (1.5, 4.0),
+    },
+    "Cassava": {
+        "pH": (5.0, 7.0),
+        "Nitrogen": (0.1, 0.5),
+        "Phosphorus": (5, 25),
+        "Potassium": (100, 300),
+        "Moisture": (20, 60),
+        "Organic Matter": (1.0, 3.5),
+    },
+    "Vegetables (general)": {
+        "pH": (6.0, 7.5),
+        "Nitrogen": (0.3, 1.5),
+        "Phosphorus": (15, 50),
+        "Potassium": (120, 300),
+        "Moisture": (30, 70),
+        "Organic Matter": (2.0, 5.0),
+    },
+    "Banana": {
+        "pH": (5.5, 7.0),
+        "Nitrogen": (0.2, 0.8),
+        "Phosphorus": (10, 30),
+        "Potassium": (200, 500),
+        "Moisture": (40, 80),
+        "Organic Matter": (2.0, 6.0),
+    },
+    "Coconut": {
+        "pH": (5.5, 7.5),
+        "Nitrogen": (0.1, 0.6),
+        "Phosphorus": (5, 25),
+        "Potassium": (80, 250),
+        "Moisture": (30, 70),
+        "Organic Matter": (1.0, 4.0),
+    },
+}
 
-    img_b64 = None
-    if image_filename:
-        image_path = os.path.join("assets", image_filename)
-        if os.path.exists(image_path):
-            try:
-                with open(image_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-            except Exception:
-                img_b64 = None
 
-    st.markdown("""
-    <style>
-    .neon-glow {
-        width:132px;
-        height:132px;
-        border-radius:50%;
-        padding:6px;
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        box-shadow: 0 0 20px rgba(129,199,132,0.35), 0 0 40px rgba(165,214,167,0.18);
-        background: radial-gradient(circle at 50% 50%, rgba(129,199,132,0.12), rgba(0,0,0,0.00));
-    }
-    .neon-img {
-        width:120px;
-        height:120px;
-        border-radius:50%;
-        object-fit:cover;
-        border:3px solid rgba(255,255,255,0.06);
-        display:block;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+def crop_match_score(sample: dict, crop_profile: dict):
+    scores = []
+    for k, rng in crop_profile.items():
+        if k not in sample or pd.isna(sample[k]):
+            continue
+        val = float(sample[k])
+        low, high = rng
+        if low <= val <= high:
+            scores.append(1.0)
+        else:
+            width = max(1e-6, high - low)
+            if val < low:
+                dist = (low - val) / width
+            else:
+                dist = (val - high) / width
+            s = max(0.0, np.exp(-dist))
+            scores.append(s)
+    if not scores:
+        return 0.0
+    return float(np.mean(scores))
 
-    if img_b64:
-        html = f"""
-        <div class="neon-glow">
-            <img class="neon-img" src="data:image/png;base64,{img_b64}" />
-        </div>
-        """
+
+def recommend_crops_for_sample(sample_series: pd.Series, top_n=3):
+    sample = sample_series.to_dict()
+    scored = []
+    for crop, profile in CROP_PROFILES.items():
+        s = crop_match_score(sample, profile)
+        scored.append((crop, s))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:top_n]
+
+
+def evaluate_crop_nutrient_gaps(sample: dict, crop_profile: dict):
+    issues = []
+    for param, (low, high) in crop_profile.items():
+        val = sample.get(param, np.nan)
+        if pd.isna(val):
+            continue
+        v = float(val)
+        if v < low:
+            issues.append(f"{param} too low")
+        elif v > high:
+            issues.append(f"{param} too high")
+    return issues
+
+
+def build_crop_evaluation_table(sample_series: pd.Series, top_n: int = 6) -> pd.DataFrame:
+    sample = sample_series.to_dict()
+    rows = []
+    for crop, profile in CROP_PROFILES.items():
+        score = crop_match_score(sample, profile)
+        issues = evaluate_crop_nutrient_gaps(sample, profile)
+        if score >= 0.66:
+            suitability = "Good"
+        elif score >= 0.33:
+            suitability = "Moderate"
+        else:
+            suitability = "Poor"
+
+        if not issues:
+            recommendation = "Soil meets most nutrient requirements for this crop."
+        else:
+            recommendation = (
+                "Improve soil for this crop by addressing: " + ", ".join(issues)
+            )
+
+        rows.append(
+            {
+                "Crop": crop,
+                "Suitability": suitability,
+                "MatchScore": round(score, 3),
+                "LimitingFactors": ", ".join(issues) if issues else "None",
+                "Recommendation": recommendation,
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    df_eval = pd.DataFrame(rows)
+    df_eval = df_eval.sort_values("MatchScore", ascending=False)
+    if top_n and top_n > 0:
+        df_eval = df_eval.head(top_n)
+    return df_eval
+
+
+def compute_suitability_score(row, features=None):
+    if features is None:
+        features = [
+            "pH",
+            "Nitrogen",
+            "Phosphorus",
+            "Potassium",
+            "Moisture",
+            "Organic Matter",
+        ]
+    vals = []
+    for f in features:
+        if f not in row or pd.isna(row[f]):
+            continue
+        vals.append(row[f])
+    if not vals:
+        return 0.0
+
+    df = st.session_state.get("df")
+    if df is not None:
+        score_components = []
+        for f in features:
+            if f not in df.columns or f not in row or pd.isna(row[f]):
+                continue
+            low = df[f].quantile(0.05)
+            high = df[f].quantile(0.95)
+            if high - low <= 0:
+                norm = 0.5
+            else:
+                norm = (row[f] - low) / (high - low)
+            norm = float(np.clip(norm, 0, 1))
+            score_components.append(norm)
+        if not score_components:
+            return 0.0
+        base_score = float(np.mean(score_components))
     else:
-        html = """
-        <div class="neon-glow">
-            <div style="font-size:44px;opacity:0.75;">👤</div>
-        </div>
-        """
+        base_score = float(np.mean(vals)) / (
+            np.max(vals) if np.max(vals) != 0 else 1.0
+        )
 
-    st.markdown(html, unsafe_allow_html=True)
-    st.markdown(f"<div style='margin-top:8px;font-weight:700;color:{st.session_state['current_theme']['secondary_color']};'>{name}</div>", unsafe_allow_html=True)
-    st.markdown("<div style='font-size:14px;color:rgba(255,255,255,0.85);margin-top:4px;font-weight:600;'>BSIS 4-A</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    fi = None
+    feat = None
+    if st.session_state.get("results"):
+        fi = st.session_state["results"].get("feature_importances")
+        feat = st.session_state["results"].get("X_columns")
+    if fi and feat:
+        weights = {f_name: w for f_name, w in zip(feat, fi)}
+        weighted = []
+        for f, w in weights.items():
+            if f in row and f in (df.columns if df is not None else []) and not pd.isna(
+                row[f]
+            ):
+                low = df[f].quantile(0.05)
+                high = df[f].quantile(0.95)
+                if high - low <= 0:
+                    norm = 0.5
+                else:
+                    norm = (row[f] - low) / (high - low)
+                norm = float(np.clip(norm, 0, 1))
+                weighted.append(norm * w)
+        if weighted:
+            wsum = float(np.sum(list(weights.values())))
+            if wsum > 0:
+                return float(np.sum(weighted) / wsum)
+    return base_score
 
-# ----------------- Upload & Preprocess widget -----------------
+
+def suitability_color(score):
+    if score >= 0.66:
+        return ("Green", "#2ecc71")
+    if score >= 0.33:
+        return ("Orange", "#f39c12")
+    return ("Red", "#e74c3c")
+
+
+def clip_soil_ranges(df: pd.DataFrame) -> pd.DataFrame:
+    if "pH" in df.columns:
+        df["pH"] = df["pH"].clip(3.5, 9.0)
+    if "Moisture" in df.columns:
+        df["Moisture"] = df["Moisture"].clip(0, 100)
+    if "Organic Matter" in df.columns:
+        df["Organic Matter"] = df["Organic Matter"].clip(lower=0)
+    for ncol in ["Nitrogen", "Phosphorus", "Potassium"]:
+        if ncol in df.columns:
+            q_low = df[ncol].quantile(0.01)
+            q_high = df[ncol].quantile(0.99)
+            if pd.notna(q_low) and pd.notna(q_high) and q_high > q_low:
+                df[ncol] = df[ncol].clip(q_low, q_high)
+    return df
+
+
+def run_kmeans_on_df(
+    df: pd.DataFrame, features: list, n_clusters: int = 3
+):
+    sub = df[features].dropna().copy()
+    if sub.shape[0] < n_clusters or n_clusters < 1:
+        return None, None
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(sub)
+    model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels = model.fit_predict(X_scaled)
+    sub["cluster"] = labels
+    return sub, model
+
+
 def upload_and_preprocess_widget():
     st.markdown("### 📂 Upload Soil Data")
-    st.markdown("Upload one or more soil analysis files (.csv or .xlsx). The app will attempt to standardize column names and auto-preprocess numeric columns.")
-    uploaded_files = st.file_uploader("Select datasets", type=['csv', 'xlsx'], accept_multiple_files=True)
+    st.markdown(
+        "Upload one or more soil analysis files (.csv or .xlsx). The app will attempt "
+        "to standardize column names and auto-preprocess numeric columns."
+    )
+    uploaded_files = st.file_uploader(
+        "Select datasets", type=["csv", "xlsx"], accept_multiple_files=True
+    )
 
     if st.session_state["df"] is not None and not uploaded_files:
-        st.success(f"✅ Loaded preprocessed dataset ({st.session_state['df'].shape[0]} rows, {st.session_state['df'].shape[1]} cols).")
+        st.success(
+            f"✅ Loaded preprocessed dataset "
+            f"({st.session_state['df'].shape[0]} rows, "
+            f"{st.session_state['df'].shape[1]} cols)."
+        )
         st.dataframe(st.session_state["df"].head())
         if st.button("🔁 Clear current dataset"):
             st.session_state["df"] = None
@@ -361,27 +783,78 @@ def upload_and_preprocess_widget():
     if uploaded_files:
         for file in uploaded_files:
             try:
-                df_file = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+                if hasattr(file, "size") and file.size > 8 * 1024 * 1024:
+                    st.warning(f"{file.name} is too large! Must be <8MB.")
+                    continue
+                if not (file.name.endswith(".csv") or file.name.endswith(".xlsx")):
+                    st.warning(f"{file.name}: Unsupported extension.")
+                    continue
+
+                if file.name.endswith(".csv"):
+                    df_file = pd.read_csv(file)
+                else:
+                    df_file = pd.read_excel(file)
+
+                if df_file.empty:
+                    st.warning(f"{file.name} is empty!")
+                    continue
+                if len(df_file.columns) < 2:
+                    st.warning(f"{file.name} has too few columns for analysis.")
+                    continue
+
+                # --- robust column standardization (FIRST match wins) ---
+                col_norm_map = {}
+                for c in df_file.columns:
+                    key = normalize_col_name(c)
+                    if key not in col_norm_map:
+                        col_norm_map[key] = c  # keep first encountered column
+
                 renamed = {}
                 for std_col, alt_names in column_mapping.items():
-                    for alt in alt_names:
-                        if alt in df_file.columns:
-                            renamed[alt] = std_col
+                    candidates = [std_col] + alt_names
+                    for cand in candidates:
+                        norm_cand = normalize_col_name(cand)
+                        if norm_cand in col_norm_map:
+                            src_col = col_norm_map[norm_cand]
+                            renamed[src_col] = std_col
                             break
-                df_file.rename(columns=renamed, inplace=True)
-                cols_to_keep = [col for col in required_columns if col in df_file.columns]
-                df_file = df_file[cols_to_keep]
-                safe_to_numeric_columns(df_file, cols_to_keep)
+
+                if renamed:
+                    df_file.rename(columns=renamed, inplace=True)
+
+                numeric_core_cols = [
+                    col
+                    for col in required_columns + ["Latitude", "Longitude"]
+                    if col in df_file.columns
+                ]
+                safe_to_numeric_columns(df_file, numeric_core_cols)
+
                 df_file.drop_duplicates(inplace=True)
                 cleaned_dfs.append(df_file)
-                st.success(f"✅ Cleaned {file.name} — kept: {', '.join(cols_to_keep)} ({df_file.shape[0]} rows)")
+
+                recognized = [
+                    c
+                    for c in required_columns
+                    + ["Latitude", "Longitude", "Fertility_Level", "Province"]
+                    if c in df_file.columns
+                ]
+                recog_text = (
+                    ", ".join(recognized) if recognized else "no core soil features"
+                )
+                st.success(
+                    f"✅ Cleaned {file.name} — recognized: {recog_text} "
+                    f"({df_file.shape[0]} rows)"
+                )
             except Exception as e:
                 st.warning(f"⚠️ Skipped {file.name}: {e}")
 
-        if cleaned_dfs:
+        if cleaned_dfs and any(len(x) > 0 for x in cleaned_dfs):
             df = pd.concat(cleaned_dfs, ignore_index=True, sort=False)
-            df.replace(r'^\s*$', np.nan, regex=True, inplace=True)
-            safe_to_numeric_columns(df, required_columns)
+            if df.empty:
+                st.error("All loaded files are empty after concatenation.")
+                return
+
+            safe_to_numeric_columns(df, required_columns + ["Latitude", "Longitude"])
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             if len(numeric_cols) > 0:
@@ -394,18 +867,32 @@ def upload_and_preprocess_widget():
                     if df[c].isnull().sum() > 0:
                         df[c].fillna(df[c].mode().iloc[0], inplace=True)
                 except Exception:
-                    df[c].fillna(method='ffill', inplace=True)
+                    df[c].fillna(method="ffill", inplace=True)
 
-            df.dropna(how='all', inplace=True)
+            df.dropna(how="all", inplace=True)
+
+            df = clip_soil_ranges(df)
+
+            missing_required = [col for col in required_columns if col not in df.columns]
+            if missing_required:
+                st.error(f"Some required columns missing: {missing_required}")
+                return
+
+            if "Nitrogen" in df.columns:
+                if "Fertility_Level" not in df.columns or df["Fertility_Level"].nunique() < 2:
+                    df["Fertility_Level"] = create_fertility_label(
+                        df, col="Nitrogen", q=3
+                    )
+
             st.session_state["df"] = df
             st.success("✨ Dataset preprocessed and stored in session.")
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
             download_df_button(df)
-
-            # show proceed buttons
             st.markdown("---")
-            st.markdown("When you're ready you can go straight to Modeling or Visualization:")
+            st.markdown(
+                "When you're ready you can go straight to Modeling or Visualization:"
+            )
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("➡️ Proceed to Modeling"):
@@ -416,41 +903,143 @@ def upload_and_preprocess_widget():
                     st.session_state["page_override"] = "📊 Visualization"
                     st.experimental_rerun()
         else:
-            st.error("No valid sheets processed. Check file formats and column headers.")
+            st.error(
+                "No valid sheets processed. Check file formats and column headers."
+            )
 
-# ----------------- HOME -----------------
+
+def render_profile(name, asset_filename):
+    st.markdown(
+        """
+    <style>
+    .avatar-card {
+        display: flex; flex-direction: column; align-items: center; 
+        margin-bottom: 22px;
+    }
+    .avatar-holo {
+        width: 170px; height: 170px;
+        border-radius: 50%;
+        background: conic-gradient(from 180deg at 50% 50%, #00ffd0, #fff700, #ff00d4, #00ffd0 100%);
+        padding: 6px;
+        box-shadow: 0 0 19px 2px #00ffd088, 0 0 36px 11px #ff00d455;
+        position: relative;
+        margin-bottom: 18px;
+        transition: box-shadow 0.3s ease;
+        animation: hologlow 2.9s infinite alternate;
+    }
+    @keyframes hologlow {
+      to {
+        box-shadow: 0 0 9px 6px #fff70077, 0 0 80px 11px #0ffbdd44;
+      }
+    }
+    .avatar-holo img {
+        width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+        box-shadow: 0 3px 15px #0004;
+        background: #fff;
+    }
+    .avatar-name {
+      font-size: 22px; font-weight: 700;
+      color: #00ffd0; 
+      margin-bottom: 6px; margin-top: -4px;
+      letter-spacing: 1px;
+    }
+    .avatar-role {
+      font-size: 14px;
+      color: #444; font-style: italic;
+      padding-bottom: 2px;
+    }
+    .bsis-label {
+      margin-top: 7px; margin-bottom: 7px;
+      padding: 5px 18px; font-size: 16.5px; font-weight: 700;
+      color: #fff; background: linear-gradient(to right, #1dd1ff, #ff75db);
+      border-radius: 18px; border: none;
+      box-shadow: 0 2px 10px #00ffd066;
+      text-align: center; display: inline-block; letter-spacing: 1.3px;
+      outline: none;
+      transition: background 0.2s;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    asset_path = f"assets/{asset_filename}"
+    try:
+        image = Image.open(asset_path)
+        buf = BytesIO()
+        image.save(buf, format="PNG", unsafe_allow_html=True)
+        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        img_html = f'<img src="data:image/png;base64,{img_b64}" alt="profile" />'
+    except Exception:
+        img_html = (
+            '<div style="width:170px;height:170px;background:#eee;border-radius:50%;'
+            "display:flex;align-items:center;justify-content:center;color:#aaa;"
+            '">No Image</div>'
+        )
+
+    role_line = ""
+    if "andre" in name.lower():
+        role_line = "Developer | Machine Learning, Full Stack, Soil Science"
+    elif "rica" in name.lower():
+        role_line = "Developer | Data Analysis, Visualization, Soil Science"
+
+    st.markdown(f"""
+    <div class="avatar-card">
+        <div class="avatar-holo">{img_html}</div>
+        <div class="avatar-name">{name}</div>
+        <div class="avatar-role">{role_line}</div>
+        <div class="bsis-label">BSIS-4A</div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------- MAIN PAGE LOGIC -----------------
 if page == "🏠 Home":
-    st.title("Machine Learning-Driven Soil Analysis for Sustainable Agriculture System")
-    st.markdown("<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>", unsafe_allow_html=True)
+    st.title(
+        "Machine Learning-Driven Soil Analysis for Sustainable Agriculture System"
+    )
+    st.markdown(
+        "<small style='color:rgba(255,255,255,0.75)'>Capstone Project</small>",
+        unsafe_allow_html=True,
+    )
     st.write("---")
-    # Upload UI only (no mode toggle here)
     upload_and_preprocess_widget()
 
-# ----------------- MODELING -----------------
 elif page == "🤖 Modeling":
     st.title("🤖 Modeling — Random Forest")
-    st.markdown("Train Random Forest models for Fertility (Regression) or Soil Health (Classification).")
+    st.markdown(
+        "Train Random Forest models for Fertility (Regression) or Soil Health (Classification)."
+    )
     if st.session_state["df"] is None:
         st.info("Please upload a dataset first in 'Home'.")
     else:
         df = st.session_state["df"].copy()
 
-        # ---- Mode toggle: checkbox (stateful) + visual switch that changes color ----
         st.markdown("#### Model Mode")
-        # model_mode_checkbox True => Regression, False => Classification
-        default_checkbox = True if st.session_state.get("task_mode") == "Regression" else False
-        chk = st.checkbox("Switch to Regression mode", value=default_checkbox, key="model_mode_checkbox")
+        default_checkbox = (
+            True if st.session_state.get("task_mode") == "Regression" else False
+        )
+        chk = st.checkbox(
+            "Switch to Regression mode", value=default_checkbox, key="model_mode_checkbox"
+        )
         if chk:
             st.session_state["task_mode"] = "Regression"
             st.session_state["current_theme"] = theme_sakura
         else:
             st.session_state["task_mode"] = "Classification"
             st.session_state["current_theme"] = theme_classification
+
         apply_theme(st.session_state["current_theme"])
 
-        # Visual switch (reflects checkbox state) — purely visual
-        switch_color = "#ff8aa2" if st.session_state["task_mode"] == "Regression" else "#81c784"
-        st.markdown(f"""
+        switch_color = (
+            "#ff8aa2"
+            if st.session_state["task_mode"] == "Regression"
+            else "#81c784"
+        )
+        st.markdown(
+            f"""
         <style>
         .fake-switch {{
             width:70px;
@@ -476,25 +1065,30 @@ elif page == "🤖 Modeling":
           </div>
           <div class="switch-label">{'Regression' if st.session_state['task_mode']=='Regression' else 'Classification'}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("---", unsafe_allow_html=True)
 
-        st.markdown("---")
-
-        # prepare target and X depending on mode
         if st.session_state["task_mode"] == "Classification":
-            if 'Nitrogen' in df.columns:
-                df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
-            y = df['Fertility_Level'] if 'Fertility_Level' in df.columns else None
+            if "Fertility_Level" not in df.columns and "Nitrogen" in df.columns:
+                df["Fertility_Level"] = create_fertility_label(df, col="Nitrogen", q=3)
+            y = df["Fertility_Level"] if "Fertility_Level" in df.columns else None
         else:
-            y = df['Nitrogen'] if 'Nitrogen' in df.columns else None
+            y = df["Nitrogen"] if "Nitrogen" in df.columns else None
 
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
-        if 'Nitrogen' in numeric_features:
-            numeric_features.remove('Nitrogen')
+        for loccol in ["Latitude", "Longitude"]:
+            if loccol in numeric_features:
+                numeric_features.remove(loccol)
+        if "Nitrogen" in numeric_features:
+            numeric_features.remove("Nitrogen")
 
         st.subheader("Feature Selection")
         st.markdown("Select numeric features to include in the model.")
-        selected_features = st.multiselect("Features", options=numeric_features, default=numeric_features)
+        selected_features = st.multiselect(
+            "Features", options=numeric_features, default=numeric_features
+        )
 
         if not selected_features:
             st.warning("Select at least one feature.")
@@ -508,30 +1102,79 @@ elif page == "🤖 Modeling":
             with col2:
                 max_depth = st.slider("max_depth", 2, 50, 12)
 
-            # scaling & split
             scaler = MinMaxScaler()
             X_scaled = scaler.fit_transform(X)
             X_scaled_df = pd.DataFrame(X_scaled, columns=selected_features)
-            test_size = st.slider("Test set fraction (%)", 10, 40, 20, step=5)
-            X_train, X_test, y_train, y_test = train_test_split(X_scaled_df, y, test_size=test_size/100, random_state=42)
 
-            if st.button("🚀 Train Model"):
+            test_size = st.slider("Test set fraction (%)", 10, 40, 20, step=5)
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled_df, y, test_size=test_size / 100, random_state=42
+            )
+
+            if st.button("🚀 Train Random Forest"):
+                if n_estimators > 300:
+                    st.info(
+                        "High n_estimators may take a while to train! "
+                        "Consider lowering for faster results."
+                    )
                 with st.spinner("Training Random Forest..."):
                     time.sleep(0.25)
                     if st.session_state["task_mode"] == "Classification":
-                        model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1)
+                        model = RandomForestClassifier(
+                            n_estimators=n_estimators,
+                            max_depth=max_depth,
+                            random_state=42,
+                            n_jobs=-1,
+                        )
                     else:
-                        model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1)
+                        model = RandomForestRegressor(
+                            n_estimators=n_estimators,
+                            max_depth=max_depth,
+                            random_state=42,
+                            n_jobs=-1,
+                        )
 
                     model.fit(X_train, y_train)
                     y_pred = model.predict(X_test)
 
-                    # cross-validation summary
                     try:
-                        cv_scores = cross_val_score(model, X_scaled_df, y, cv=5, scoring='accuracy' if st.session_state["task_mode"] == "Classification'".strip("'") else 'r2')
-                        cv_summary = {"mean_cv": float(np.mean(cv_scores)), "std_cv": float(np.std(cv_scores))}
+                        cv_scores = cross_val_score(
+                            model,
+                            X_scaled_df,
+                            y,
+                            cv=5,
+                            scoring=(
+                                "accuracy"
+                                if st.session_state["task_mode"] == "Classification"
+                                else "r2"
+                            ),
+                        )
+                        cv_summary = {
+                            "mean_cv": float(np.mean(cv_scores)),
+                            "std_cv": float(np.std(cv_scores)),
+                        }
                     except Exception:
                         cv_summary = None
+
+                    try:
+                        perm_imp = permutation_importance(
+                            model,
+                            X_test,
+                            y_test,
+                            n_repeats=10,
+                            random_state=42,
+                            n_jobs=-1,
+                        )
+                        perm_df = pd.DataFrame(
+                            {
+                                "feature": selected_features,
+                                "importance": perm_imp.importances_mean,
+                            }
+                        )
+                        perm_df = perm_df.sort_values("importance", ascending=False)
+                        perm_data = perm_df.to_dict("records")
+                    except Exception:
+                        perm_data = None
 
                     st.session_state["model"] = model
                     st.session_state["scaler"] = scaler
@@ -542,117 +1185,613 @@ elif page == "🤖 Modeling":
                         "model_name": f"Random Forest {st.session_state['task_mode']} Model",
                         "X_columns": selected_features,
                         "feature_importances": model.feature_importances_.tolist(),
-                        "cv_summary": cv_summary
+                        "cv_summary": cv_summary,
+                        "permutation_importance": perm_data,
                     }
                     st.session_state["trained_on_features"] = selected_features
-                    st.success("✅ Training completed. Go to 'Results' to inspect performance.")
+                    st.success(
+                        "✅ Training completed. Go to 'Results' to inspect performance and explanations."
+                    )
 
-            # Predict inline
-            st.markdown("### Predict a New Sample")
-            if st.session_state.get("model"):
-                new_inputs = {}
-                for f in selected_features:
-                    new_inputs[f] = st.number_input(f"Value for {f}", value=float(np.median(df[f])) if f in df else 0.0, format="%.3f", key=f"input_{f}")
-                if st.button("🔮 Predict Sample"):
-                    input_df = pd.DataFrame([new_inputs])
-                    scaler_local = st.session_state["scaler"] if st.session_state.get("scaler") else MinMaxScaler().fit(df[selected_features])
-                    input_scaled = scaler_local.transform(input_df)
-                    pred = st.session_state["model"].predict(input_scaled)
-                    st.subheader("Prediction")
-                    if st.session_state["task_mode"] == "Classification":
-                        pred_label, color, expl = interpret_label(pred[0])
-                        st.markdown(f"**Predicted Fertility:** <span style='color:{color};font-weight:700'>{pred_label}</span>", unsafe_allow_html=True)
-                        st.write(expl)
-                    else:
-                        st.markdown(f"**Predicted Nitrogen:** <span style='color:{st.session_state['current_theme']['primary_color']};font-weight:700'>{pred[0]:.3f}</span>", unsafe_allow_html=True)
-
-# ----------------- VISUALIZATION -----------------
 elif page == "📊 Visualization":
-    st.title("📊 Data Visualization")
-    st.markdown("Explore distributions, correlations, and relationships in your preprocessed data.")
+    st.title("📊 Visual Analytics")
+    st.markdown(
+        "All charts are organized by goal: **EDA** (understand the data), **Spatial** (maps), and **Clusters** (groupings)."
+    )
+
     if st.session_state["df"] is None:
         st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
     else:
-        df = st.session_state["df"]
-        # ensure fertility label for classification view
-        if 'Nitrogen' in df.columns and 'Fertility_Level' not in df.columns:
-            df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3)
+        df = st.session_state["df"].copy()
 
-        # Parameter overview (histograms + level boxes)
-        st.subheader("Parameter Overview (Levels & Distributions)")
-        param_cols = [c for c in ['pH', 'Nitrogen', 'Phosphorus', 'Potassium', 'Moisture', 'Organic Matter'] if c in df.columns]
-        if not param_cols:
-            st.warning("No recognized parameter columns found. Required example columns: pH, Nitrogen, Phosphorus, Potassium, Moisture, Organic Matter")
+        # Ensure a fertility label exists (used by several visuals)
+        if "Nitrogen" in df.columns and "Fertility_Level" not in df.columns:
+            df["Fertility_Level"] = create_fertility_label(df, col="Nitrogen", q=3)
+
+        # ---- Dataset status header ----
+        st.markdown("### Dataset Status")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Rows", f"{len(df):,}")
+        c2.metric("Columns", f"{df.shape[1]:,}")
+        c3.metric("Missing cells", f"{int(df.isna().sum().sum()):,}")
+
+        has_coords = ("Latitude" in df.columns) and ("Longitude" in df.columns)
+        if has_coords:
+            try:
+                land_count = len(_filter_mindanao_land_only(df))
+            except Exception:
+                land_count = 0
+            c4.metric("Mindanao land points", f"{land_count:,}")
         else:
-            # grid of hist + box for each
-            for col in param_cols:
-                fig = px.histogram(df, x=col, nbins=30, marginal="box", title=f"Distribution: {col}", color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]])
-                fig.update_layout(template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
-                # small explanation
-                st.markdown(f"<div style='font-size:13px;color:rgba(255,255,255,0.85)'>This histogram shows the distribution of **{col}** across samples. Use the median and spread to assess central tendency and variability.</div>", unsafe_allow_html=True)
-                st.markdown("---")
+            c4.metric("Mindanao land points", "—")
 
-            # Correlation heatmap
+        performance_mode = st.toggle(
+            "⚡ Performance mode (recommended for large datasets)",
+            value=True,
+            help="Automatically samples rows for heavy plots (pairplots, cluster pairplots) to keep the app responsive.",
+        )
+
+        st.markdown("---")
+
+        # ---- Organized tabs ----
+        tab_eda, tab_spatial, tab_clusters = st.tabs(["🔎 EDA", "🗺️ Spatial", "🧩 Clusters"])
+
+        # =====================
+        # 🔎 EDA
+        # =====================
+        with tab_eda:
+            st.subheader("Parameter Overview")
+            st.caption("Distributions of key soil parameters. Use this to spot skew, outliers, and typical ranges.")
+
+            param_cols = [
+                c
+                for c in ["pH", "Nitrogen", "Phosphorus", "Potassium", "Moisture", "Organic Matter"]
+                if c in df.columns
+            ]
+
+            if not param_cols:
+                st.warning(
+                    "No recognized parameter columns found. Example columns: pH, Nitrogen, Phosphorus, Potassium, Moisture, Organic Matter"
+                )
+            else:
+                for col in param_cols:
+                    fig = px.histogram(
+                        df,
+                        x=col,
+                        nbins=30,
+                        marginal="box",
+                        title=f"Distribution: {col}",
+                        color_discrete_sequence=[st.session_state["current_theme"]["primary_color"]],
+                    )
+                    fig.update_layout(template="plotly_dark")
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"Histogram + box summary for **{col}**.")
+                    st.markdown("---")
+
             st.subheader("Correlation Matrix")
+            st.caption("How numeric features move together. Strong correlations can indicate redundancy or meaningful relationships.")
+
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             if numeric_cols:
-                corr = df[numeric_cols].corr()
-                fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Correlation Heatmap")
-                fig_corr.update_layout(template="plotly_dark")
-                st.plotly_chart(fig_corr, use_container_width=True)
-                st.markdown("<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Correlation between numeric parameters. High correlation may indicate redundant features for modeling.</div>", unsafe_allow_html=True)
+                exclude_like = {"latitude", "lat", "longitude", "lon", "lng", "long", "longitude_2"}
+                default_cols = [c for c in numeric_cols if c.strip().lower() not in exclude_like][:12]
+                selected_cols = st.multiselect(
+                    "Select numeric columns (fewer columns = clearer heatmap)",
+                    options=numeric_cols,
+                    default=default_cols if len(default_cols) >= 2 else numeric_cols[: min(12, len(numeric_cols))],
+                )
 
-        # Mode-specific visualization
-        st.markdown("---")
-        st.subheader("Mode-specific Visuals")
-        mode = st.session_state.get("task_mode", "Classification")
-        st.markdown(f"**Current Mode:** {mode}")
-        if mode == "Classification":
-            # Show Fertility_Level counts + stacked bar of distribution by parameter ranges
-            if 'Fertility_Level' not in df.columns:
-                df['Fertility_Level'] = create_fertility_label(df, col='Nitrogen', q=3) if 'Nitrogen' in df.columns else "Unknown"
-            fig_bar = px.histogram(df, x='Fertility_Level', title="Fertility Level Counts")
-            fig_bar.update_layout(template="plotly_dark")
-            st.plotly_chart(fig_bar, use_container_width=True)
-            st.markdown("<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Shows counts of Low, Moderate, High fertility across samples.</div>", unsafe_allow_html=True)
-        else:
-            # Regression visuals — show relationship Nitrogen vs top features
-            if 'Nitrogen' not in df.columns:
-                st.warning("Nitrogen column required for Regression visuals.")
+                if selected_cols is None or len(selected_cols) < 2:
+                    st.info("Select at least 2 numeric columns to view the correlation matrix.")
+                else:
+                    show_values = st.checkbox(
+                        "Show correlation values on cells (can get cluttered)",
+                        value=False,
+                    )
+
+                    corr = df[selected_cols].corr()
+                    corr = corr.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+                    fig_corr = px.imshow(
+                        corr,
+                        color_continuous_scale=px.colors.sequential.Viridis,
+                        zmin=-1,
+                        zmax=1,
+                        aspect="auto",
+                        title="Correlation Heatmap",
+                    )
+                    fig_corr.update_layout(
+                        template="plotly_dark",
+                        height=650,
+                        margin=dict(l=40, r=40, t=70, b=40),
+                    )
+                    fig_corr.update_xaxes(tickangle=45, tickfont=dict(size=12))
+                    fig_corr.update_yaxes(tickfont=dict(size=12))
+
+                    if show_values and len(selected_cols) <= 15:
+                        txt = corr.round(2).astype(str).values
+                        fig_corr.update_traces(
+                            text=txt,
+                            texttemplate="%{text}",
+                            textfont=dict(color="white", size=10),
+                        )
+                    else:
+                        fig_corr.update_traces(text=None)
+
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                    st.caption("Correlation heatmap for the selected numeric features.")
             else:
-                # show scatter of Nitrogen vs top numeric columns
-                top_num = [c for c in df.select_dtypes(include=[np.number]).columns if c != 'Nitrogen'][:3]
-                for feat in top_num:
-                    fig_sc = px.scatter(df, x=feat, y='Nitrogen', trendline="ols", title=f"Nitrogen vs {feat}")
-                    # try to safely compute trendline (statsmodels required). Plotly will warn if missing.
-                    try:
-                        fig_sc.update_layout(template="plotly_dark")
-                    except Exception:
-                        pass
-                    st.plotly_chart(fig_sc, use_container_width=True)
-                    st.markdown(f"<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Scatter showing relationship of {feat} against Nitrogen. Trendline (OLS) included if statsmodels is available.</div>", unsafe_allow_html=True)
+                st.info("No numeric columns available for correlation matrix.")
 
-# ----------------- RESULTS -----------------
+            # ---- Notebook-style EDA (in expanders) ----
+            st.markdown("---")
+            st.subheader("📒 Notebook EDA (Colab-style)")
+            st.caption("These visuals mirror the notebook’s EDA without cluttering the main flow.")
+
+            import matplotlib.pyplot as plt
+            try:
+                import seaborn as sns
+                _has_sns = True
+            except Exception:
+                sns = None
+                _has_sns = False
+
+            def _pick_col(_df, candidates):
+                for c in candidates:
+                    if c in _df.columns:
+                        return c
+                return None
+
+            fert_col = _pick_col(df, ["fertility_class", "Fertility_Level"])
+
+            features = []
+            for c in ["pH", "ph", "PH"]:
+                if c in df.columns:
+                    features.append(c)
+                    break
+            for c in ["Nitrogen", "Phosphorus", "Potassium", "Moisture", "Organic Matter", "Organic_Matter"]:
+                if c in df.columns and c not in features:
+                    features.append(c)
+
+            for c in features:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+
+            with st.expander("Pairplot (slow)", expanded=False):
+                st.markdown("**What it shows:** relationships between every pair of key soil features.")
+                if not _has_sns:
+                    st.info("Seaborn is not installed, so pairplots are unavailable.")
+                elif len(features) < 2:
+                    st.info("Not enough numeric columns available for a pairplot.")
+                else:
+                    max_n = 1500 if performance_mode else 6000
+                    sample_n = st.slider(
+                        "Sample size",
+                        min_value=200,
+                        max_value=max_n,
+                        value=min(1500, max_n),
+                        step=100,
+                        key="nb_pairplot_sample",
+                    )
+                    d = df[features].dropna()
+                    if len(d) > sample_n:
+                        d = d.sample(sample_n, random_state=42)
+                    g = sns.pairplot(d, diag_kind="kde")
+                    st.pyplot(g.figure, clear_figure=True)
+                    st.caption("Pairplot: diagonals show KDE distributions; off-diagonals show pairwise scatter.")
+
+            with st.expander("Histograms + KDE (per feature)", expanded=False):
+                st.markdown("**What it shows:** each feature’s distribution + density curve.")
+                if not _has_sns:
+                    st.info("Seaborn is not installed, so KDE histograms are unavailable.")
+                elif not features:
+                    st.info("No notebook numeric features found in this dataset.")
+                else:
+                    chosen = st.multiselect("Choose features", features, default=features, key="nb_hist_features")
+                    for f in chosen:
+                        x = df[f].dropna()
+                        if x.empty:
+                            continue
+                        fig, ax = plt.subplots(figsize=(9, 4))
+                        sns.histplot(data=df, x=f, kde=True, ax=ax)
+                        ax.set_title(f"Distribution of {f}")
+                        ax.set_xlabel(f)
+                        ax.set_ylabel("Frequency")
+                        st.pyplot(fig, clear_figure=True)
+                        st.caption(f"Histogram + KDE for **{f}**.")
+
+            with st.expander("Boxplots by Fertility (per feature)", expanded=False):
+                st.markdown("**What it shows:** differences in feature distributions across fertility groups.")
+                if not _has_sns:
+                    st.info("Seaborn is not installed, so boxplots are unavailable.")
+                elif fert_col is None:
+                    st.info("Fertility label not found. Expected `fertility_class` or `Fertility_Level`.")
+                elif not features:
+                    st.info("No notebook numeric features found in this dataset.")
+                else:
+                    chosen = st.multiselect(
+                        "Choose features",
+                        features,
+                        default=features,
+                        key="nb_box_features",
+                    )
+                    for f in chosen:
+                        dtmp = df[[fert_col, f]].dropna()
+                        if dtmp.empty:
+                            continue
+                        fig, ax = plt.subplots(figsize=(10, 4))
+                        sns.boxplot(data=dtmp, x=fert_col, y=f, ax=ax)
+                        ax.set_title(f"{f} by {fert_col}")
+                        ax.set_xlabel(fert_col)
+                        ax.set_ylabel(f)
+                        st.pyplot(fig, clear_figure=True)
+                        st.caption(f"Boxplot of **{f}** grouped by **{fert_col}**.")
+
+            with st.expander("Correlated Pairs (auto-selected)", expanded=False):
+                st.markdown("**What it shows:** the strongest correlated feature pairs as scatterplots.")
+                if not _has_sns:
+                    st.info("Seaborn is not installed, so scatterplots are unavailable.")
+                elif len(features) < 2:
+                    st.info("Need at least 2 numeric features to compute correlations.")
+                else:
+                    threshold = st.slider("Correlation threshold (abs)", 0.05, 0.95, 0.10, 0.05, key="nb_corr_thr")
+                    topk = st.slider("Max pairs to plot", 1, 25, 10, 1, key="nb_corr_topk")
+
+                    corr2 = df[features].corr(numeric_only=True)
+                    pairs = (
+                        corr2.where(np.triu(np.ones(corr2.shape), k=1).astype(bool))
+                        .stack()
+                        .reset_index()
+                    )
+                    pairs.columns = ["Feature1", "Feature2", "Correlation"]
+                    pairs["AbsCorr"] = pairs["Correlation"].abs()
+                    pairs = pairs[pairs["AbsCorr"] >= threshold].sort_values("AbsCorr", ascending=False).head(topk)
+
+                    if pairs.empty:
+                        st.info("No correlated pairs meet the threshold.")
+                    else:
+                        st.dataframe(pairs[["Feature1", "Feature2", "Correlation"]], use_container_width=True)
+                        for _, r in pairs.iterrows():
+                            f1, f2, cval = r["Feature1"], r["Feature2"], r["Correlation"]
+                            dtmp = df[[f1, f2]].dropna()
+                            fig, ax = plt.subplots(figsize=(8, 5))
+                            sns.scatterplot(data=dtmp, x=f1, y=f2, ax=ax, alpha=0.7)
+                            ax.set_title(f"{f2} vs {f1} (corr={cval:.2f})")
+                            st.pyplot(fig, clear_figure=True)
+                            st.caption(f"Scatterplot for correlated pair **{f1} ↔ {f2}**.")
+
+        # =====================
+        # 🗺️ Spatial
+        # =====================
+        with tab_spatial:
+            st.subheader("Soil Health Classification Map (Random Forest)")
+            st.caption("Legend: 🟢 High • 🟠 Moderate • 🔴 Poor. Uses your trained Random Forest predictions and hides offshore/outside points.")
+
+            if not has_coords:
+                st.info("Latitude and Longitude columns are required to generate the Folium map.")
+            else:
+                model = st.session_state.get("model")
+                scaler = st.session_state.get("scaler")
+                trained_features = st.session_state.get("trained_on_features")
+                results = st.session_state.get("results")
+
+                if (
+                    model is not None
+                    and scaler is not None
+                    and trained_features is not None
+                    and all(f in df.columns for f in trained_features)
+                ):
+                    try:
+                        X_all = df[trained_features]
+                        X_scaled_all = scaler.transform(X_all)
+                        preds = model.predict(X_scaled_all)
+
+                        task = None
+                        if results and isinstance(results, dict) and "task" in results:
+                            task = results["task"]
+                        else:
+                            task = st.session_state.get("task_mode", "Classification")
+
+                        df_rf = df.copy()
+                        df_rf["RF_Prediction"] = preds
+
+                        if str(task).lower().startswith("class"):
+                            def _to_sustainability(v):
+                                s = str(v).strip().lower()
+                                if s in {"high"}:
+                                    return "High"
+                                if s in {"moderate", "medium"}:
+                                    return "Moderate"
+                                if s in {"poor", "low"}:
+                                    return "Poor"
+                                return str(v)
+
+                            df_rf["Sustainability"] = df_rf["RF_Prediction"].apply(_to_sustainability)
+                        else:
+                            p = pd.to_numeric(df_rf["RF_Prediction"], errors="coerce")
+                            q1, q2 = p.quantile([0.33, 0.66]).values
+
+                            def _bucket(val):
+                                if pd.isna(val):
+                                    return np.nan
+                                if val <= q1:
+                                    return "Poor"
+                                if val <= q2:
+                                    return "Moderate"
+                                return "High"
+
+                            df_rf["Sustainability"] = p.apply(_bucket)
+
+                        df_map = _filter_mindanao_land_only(df_rf).dropna(subset=["Sustainability"])
+
+                        if not df_map.empty:
+                            center_lat = float(df_map["Latitude"].mean())
+                            center_lon = float(df_map["Longitude"].mean())
+
+                            m = folium.Map(
+                                location=[center_lat, center_lon],
+                                zoom_start=7,
+                                tiles="CartoDB dark_matter",
+                                control_scale=True,
+                            )
+
+                            min_lat, max_lat = float(df_map["Latitude"].min()), float(df_map["Latitude"].max())
+                            min_lon, max_lon = float(df_map["Longitude"].min()), float(df_map["Longitude"].max())
+                            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+                            m.options["maxBounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
+
+                            color_map = {"High": "#2ecc71", "Moderate": "#f39c12", "Poor": "#e74c3c"}
+
+                            for _, r in df_map.iterrows():
+                                cls = str(r["Sustainability"]).strip().title()
+                                if cls not in color_map:
+                                    cls = "Moderate"
+                                folium.CircleMarker(
+                                    location=[float(r["Latitude"]), float(r["Longitude"])],
+                                    radius=4,
+                                    color=color_map[cls],
+                                    fill=True,
+                                    fill_color=color_map[cls],
+                                    fill_opacity=0.85,
+                                    weight=0,
+                                ).add_to(m)
+
+                            legend_html = '''
+                            <div style="
+                                position: fixed;
+                                bottom: 30px;
+                                left: 30px;
+                                z-index: 9999;
+                                background: rgba(0,0,0,0.65);
+                                padding: 12px 14px;
+                                border-radius: 10px;
+                                color: white;
+                                font-size: 14px;
+                                line-height: 18px;
+                                ">
+                                <div style="font-weight:700; margin-bottom:6px;">Soil Health (Sustainability)</div>
+                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#2ecc71;margin-right:8px;"></span>High</div>
+                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#f39c12;margin-right:8px;"></span>Moderate</div>
+                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e74c3c;margin-right:8px;"></span>Poor</div>
+                            </div>
+                            '''
+                            m.get_root().html.add_child(folium.Element(legend_html))
+
+                            st_folium(m, width=1024, height=520)
+                        else:
+                            st.info("No valid Mindanao land points to display after filtering coordinates.")
+                    except Exception as e:
+                        st.warning(f"Unable to generate the Folium map from Random Forest predictions: {e}")
+                else:
+                    st.info("To enable this map, train a model first in the '🤖 Modeling' page.")
+
+            # ---- Notebook spatial visuals ----
+            st.markdown("---")
+            st.subheader("📒 Notebook Spatial Visuals")
+            st.caption("These replicate the notebook’s geo scatter and fertility folium maps, with the same land-only filtering to hide offshore points.")
+
+            import matplotlib.pyplot as plt
+            try:
+                import seaborn as sns
+                _has_sns2 = True
+            except Exception:
+                sns = None
+                _has_sns2 = False
+
+            def _pick_col(_df, candidates):
+                for c in candidates:
+                    if c in _df.columns:
+                        return c
+                return None
+
+            fert_col = _pick_col(df, ["fertility_class", "Fertility_Level"])
+            lat_col = _pick_col(df, ["latitude", "Latitude"])
+            lon_col = _pick_col(df, ["longitude_1", "Longitude", "longitude", "lon", "lng"])
+
+            # Geo scatter (N/P/K)
+            with st.expander("Geographical Distribution (N/P/K)", expanded=False):
+                st.markdown("**What it shows:** where nutrient concentrations are higher/lower across locations.")
+                if not _has_sns2:
+                    st.info("Seaborn is not installed, so geo scatterplots are unavailable.")
+                elif lat_col is None or lon_col is None:
+                    st.info("Latitude/Longitude not found for geo scatterplots.")
+                else:
+                    nutrients = [c for c in ["Nitrogen", "Phosphorus", "Potassium"] if c in df.columns]
+                    if not nutrients:
+                        st.info("N/P/K columns not found.")
+                    else:
+                        for n in nutrients:
+                            dtmp = df[[lat_col, lon_col, n]].dropna().copy()
+
+                            # Land-only filtering (hides offshore points without changing the main dataset)
+                            dstd = dtmp.rename(columns={lat_col: "Latitude", lon_col: "Longitude"})
+                            dstd = _filter_mindanao_land_only(dstd)
+                            dtmp = dstd.rename(columns={"Latitude": lat_col, "Longitude": lon_col})
+
+                            if dtmp.empty:
+                                continue
+                            fig, ax = plt.subplots(figsize=(10, 6))
+                            sns.scatterplot(
+                                data=dtmp,
+                                x=lon_col,
+                                y=lat_col,
+                                size=n,
+                                sizes=(20, 250),
+                                alpha=0.7,
+                                ax=ax,
+                            )
+                            ax.set_title(f"Geographical Distribution of {n}")
+                            ax.set_xlabel("Longitude")
+                            ax.set_ylabel("Latitude")
+                            ax.grid(True)
+                            st.pyplot(fig, clear_figure=True)
+                            st.caption(f"Geo scatter for **{n}**; marker size reflects concentration.")
+
+            # Fertility Folium maps (overall + by class) with land filtering
+            with st.expander("Fertility Folium Maps (land-only)", expanded=False):
+                st.markdown("**What it shows:** interactive fertility points (overall + per class) with popups. Offshore points are filtered out.")
+                if fert_col is None:
+                    st.info("Fertility label not found (expected `fertility_class` or `Fertility_Level`).")
+                elif lat_col is None or lon_col is None:
+                    st.info("Latitude/Longitude not found for folium mapping.")
+                else:
+                    color_map = {"Low": "red", "Moderate": "orange", "High": "green"}
+
+                    base = df.dropna(subset=[lat_col, lon_col, fert_col]).copy()
+
+                    # Standardize columns so we can apply the same Mindanao land-only filter
+                    base_std = base.rename(columns={lat_col: "Latitude", lon_col: "Longitude"}).copy()
+                    base_std = _filter_mindanao_land_only(base_std)
+
+                    # Map back to original names (for popups/labels)
+                    base_std[lat_col] = base_std["Latitude"]
+                    base_std[lon_col] = base_std["Longitude"]
+
+                    def _render_folium_map(sub_df, title):
+                        if sub_df.empty:
+                            st.warning(f"No rows available for: {title}")
+                            return
+
+                        center_lat = float(sub_df[lat_col].mean())
+                        center_lon = float(sub_df[lon_col].mean())
+                        m = folium.Map(location=[center_lat, center_lon], zoom_start=8)
+
+                        min_lat, max_lat = float(sub_df[lat_col].min()), float(sub_df[lat_col].max())
+                        min_lon, max_lon = float(sub_df[lon_col].min()), float(sub_df[lon_col].max())
+                        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+                        m.options["maxBounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
+
+                        for _, row in sub_df.iterrows():
+                            fert = str(row[fert_col])
+                            col = color_map.get(fert, "blue")
+                            popup = (
+                                f"<b>Fertility:</b> {fert}<br>"
+                                f"<b>N:</b> {row.get('Nitrogen', np.nan)}<br>"
+                                f"<b>P:</b> {row.get('Phosphorus', np.nan)}<br>"
+                                f"<b>K:</b> {row.get('Potassium', np.nan)}"
+                            )
+                            folium.CircleMarker(
+                                location=[row[lat_col], row[lon_col]],
+                                radius=5,
+                                color=col,
+                                fill=True,
+                                fill_color=col,
+                                fill_opacity=0.7,
+                                popup=folium.Popup(popup, max_width=300),
+                            ).add_to(m)
+
+                        st.markdown(f"**{title}**")
+                        st_folium(m, width=1024, height=520)
+                        st.caption("Interactive map with popups (land-only filtered).")
+
+                    _render_folium_map(base_std, "Overall Fertility Map (All Classes)")
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        _render_folium_map(base_std[base_std[fert_col].astype(str) == "High"], "High Fertility Map")
+                    with c2:
+                        _render_folium_map(base_std[base_std[fert_col].astype(str) == "Moderate"], "Moderate Fertility Map")
+
+        # =====================
+        # 🧩 Clusters
+        # =====================
+        with tab_clusters:
+            st.subheader("KMeans Clustering (Notebook-style)")
+            st.caption("Clusters reveal natural groupings in your soil profiles.")
+
+            try:
+                import seaborn as sns
+                _has_sns3 = True
+            except Exception:
+                sns = None
+                _has_sns3 = False
+
+            features = []
+            for c in ["pH", "ph", "PH"]:
+                if c in df.columns:
+                    features.append(c)
+                    break
+            for c in ["Nitrogen", "Phosphorus", "Potassium", "Moisture", "Organic Matter", "Organic_Matter"]:
+                if c in df.columns and c not in features:
+                    features.append(c)
+
+            if not _has_sns3:
+                st.info("Seaborn is not installed, so cluster pairplot is unavailable.")
+            elif len(features) < 2:
+                st.info("Not enough features for KMeans + pairplot.")
+            else:
+                k = st.slider("KMeans clusters (K)", 2, 8, 3, 1, key="kmeans_k")
+                max_n = 1500 if performance_mode else 6000
+                sample_n = st.slider(
+                    "Sample size (cluster pairplot)",
+                    min_value=200,
+                    max_value=max_n,
+                    value=min(1500, max_n),
+                    step=100,
+                    key="kmeans_sample",
+                )
+
+                X = df[features].copy()
+                X = X.apply(pd.to_numeric, errors="coerce")
+                X = X.fillna(X.median(numeric_only=True))
+                Xs = StandardScaler().fit_transform(X)
+
+                km = KMeans(n_clusters=k, random_state=42, n_init=10)
+                labels = km.fit_predict(Xs)
+
+                d = df[features].copy()
+                d["Cluster"] = labels
+                d = d.dropna()
+                if len(d) > sample_n:
+                    d = d.sample(sample_n, random_state=42)
+
+                g = sns.pairplot(d, hue="Cluster", diag_kind="kde")
+                st.pyplot(g.figure, clear_figure=True)
+                st.caption("Pairplot colored by KMeans cluster. Use it to see which variables separate clusters.")
+
+
 elif page == "📈 Results":
     st.title("📈 Model Results & Interpretation")
     if not st.session_state.get("results"):
-        st.info("No trained model in session. Train a model first (Modeling or Quick Model).")
+        st.info(
+            "No trained model in session. Train a model first (Modeling or Quick Model)."
+        )
     else:
         results = st.session_state["results"]
         task = results["task"]
         y_test = np.array(results["y_test"])
         y_pred = np.array(results["y_pred"])
 
-        # Model summary card
         st.subheader("Model Summary")
-        colA, colB = st.columns([3,2])
+        colA, colB = st.columns([3, 2])
         with colA:
-            st.write(f"**Model:** {results.get('model_name','Random Forest')}")
-            st.write(f"**Features:** {', '.join(results.get('X_columns',[]))}")
+            st.write(f"**Model:** {results.get('model_name', 'Random Forest')}")
+            st.write(f"**Features:** {', '.join(results.get('X_columns', []))}")
             if results.get("cv_summary"):
                 cv = results["cv_summary"]
-                st.write(f"Cross-val mean: **{cv['mean_cv']:.3f}** (std: {cv['std_cv']:.3f})")
+                st.write(
+                    f"Cross-val mean: **{cv['mean_cv']:.3f}** "
+                    f"(std: {cv['std_cv']:.3f})"
+                )
         with colB:
             if st.button("💾 Save Model"):
                 if st.session_state.get("model"):
@@ -666,52 +1805,80 @@ elif page == "📈 Results":
                     st.success("Scaler saved as scaler.joblib")
                 else:
                     st.warning("No scaler in session to save.")
-
         st.markdown("---")
 
-        # Two-column metrics + explanations (Option 1 you chose)
-        metrics_col, explain_col = st.columns([2,1])
+        metrics_col, explain_col = st.columns([2, 1])
         with metrics_col:
             st.subheader("Performance Metrics")
             if task == "Classification":
-                # Accuracy metric
                 try:
                     acc = accuracy_score(y_test, y_pred)
                     st.metric("Accuracy", f"{acc:.3f}")
                 except Exception:
                     st.write("Accuracy N/A")
-                # confusion matrix
+
                 st.markdown("**Confusion Matrix**")
                 try:
-                    cm = confusion_matrix(y_test, y_pred, labels=['Low','Moderate','High'])
-                    fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale=px.colors.sequential.Viridis, title="Confusion Matrix (Low / Moderate / High)")
+                    cm = confusion_matrix(
+                        y_test, y_pred, labels=["Low", "Moderate", "High"]
+                    )
+                    fig_cm = px.imshow(
+                        cm,
+                        text_auto=True,
+                        color_continuous_scale=px.colors.sequential.Viridis,
+                        title="Confusion Matrix (Low / Moderate / High)",
+                    )
                     fig_cm.update_layout(template="plotly_dark", height=350)
                     st.plotly_chart(fig_cm, use_container_width=True)
                 except Exception:
                     st.write("Confusion matrix not available")
-                # classification report as table
+
                 st.markdown("#### 📊 Classification Report (Detailed)")
                 try:
-                    rep = classification_report(y_test, y_pred, output_dict=True)
+                    rep = classification_report(
+                        y_test, y_pred, output_dict=True
+                    )
                     rep_df = pd.DataFrame(rep).transpose().reset_index()
-                    rep_df.rename(columns={"index":"Class"}, inplace=True)
-                    cols_order = ["Class","precision","recall","f1-score","support"]
-                    # ensure columns present
-                    rep_df = rep_df[[c for c in cols_order if c in rep_df.columns]]
-                    # style and display
-                    styled = rep_df.style.format({
-                        "precision":"{:.2f}",
-                        "recall":"{:.2f}",
-                        "f1-score":"{:.2f}",
-                        "support":"{:.0f}"
-                    }).background_gradient(subset=["f1-score"] if "f1-score" in rep_df.columns else None, cmap="Greens")
-                    st.dataframe(styled, use_container_width=True)
-                    st.markdown("<div style='font-size:13px;color:rgba(255,255,255,0.85)'>Precision/Recall/F1 per class. Support = number of samples.</div>", unsafe_allow_html=True)
-                except Exception as e:
-                    st.text(classification_report(y_test,y_pred))
+                    rep_df.rename(columns={"index": "Class"}, inplace=True)
+                    cols_order = [
+                        "Class",
+                        "precision",
+                        "recall",
+                        "f1-score",
+                        "support",
+                    ]
+                    rep_df = rep_df[
+                        [c for c in cols_order if c in rep_df.columns]
+                    ]
+                    st.dataframe(rep_df[cols_order], use_container_width=True)
+                    # --- NEW: Classification metrics chart (per-class) ---
+                    try:
+                        plot_df = rep_df.copy()
+                        plot_df["Class"] = plot_df["Class"].astype(str)
+                        plot_df = plot_df[~plot_df["Class"].isin(["accuracy", "macro avg", "weighted avg"])]
+                        metric_cols = [c for c in ["precision", "recall", "f1-score"] if c in plot_df.columns]
+                        if len(plot_df) > 0 and len(metric_cols) > 0:
+                            long_df = plot_df[["Class"] + metric_cols].melt(
+                                id_vars="Class", var_name="Metric", value_name="Score"
+                            )
+                            fig_rep = px.bar(
+                                long_df,
+                                x="Class",
+                                y="Score",
+                                color="Metric",
+                                barmode="group",
+                                title="Classification Metrics by Class",
+                            )
+                            fig_rep.update_yaxes(range=[0, 1])
+                            fig_rep.update_layout(xaxis_title="", yaxis_title="Score (0–1)")
+                            st.plotly_chart(fig_rep, use_container_width=True)
+                    except Exception:
+                        pass
+                    # --- END NEW ---
 
+                except Exception:
+                    st.text(classification_report(y_test, y_pred))
             else:
-                # regression metrics
                 mse = mean_squared_error(y_test, y_pred)
                 rmse = np.sqrt(mse)
                 mae = mean_absolute_error(y_test, y_pred)
@@ -720,27 +1887,42 @@ elif page == "📈 Results":
                 st.metric("MAE", f"{mae:.3f}")
                 st.metric("R²", f"{r2:.3f}")
 
-                # actual vs predicted
-                df_res = pd.DataFrame({"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred})
+                df_res = pd.DataFrame(
+                    {"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred}
+                )
                 st.markdown("**Sample predictions**")
                 st.dataframe(df_res.head(10), use_container_width=True)
-                # scatter actual vs pred with trendline if possible
+
                 st.markdown("**Actual vs Predicted**")
                 try:
-                    fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen", trendline="ols",
-                                      title="Actual vs Predicted Nitrogen (Model Predictions)")
+                    fig1 = px.scatter(
+                        df_res,
+                        x="Actual_Nitrogen",
+                        y="Predicted_Nitrogen",
+                        trendline="ols",
+                        title="Actual vs Predicted Nitrogen (Model Predictions)",
+                    )
                     fig1.update_layout(template="plotly_dark")
                     st.plotly_chart(fig1, use_container_width=True)
                 except Exception:
-                    # fallback without trendline
-                    fig1 = px.scatter(df_res, x="Actual_Nitrogen", y="Predicted_Nitrogen",
-                                      title="Actual vs Predicted Nitrogen (no trendline available)")
+                    fig1 = px.scatter(
+                        df_res,
+                        x="Actual_Nitrogen",
+                        y="Predicted_Nitrogen",
+                        title="Actual vs Predicted Nitrogen (no trendline available)",
+                    )
                     fig1.update_layout(template="plotly_dark")
                     st.plotly_chart(fig1, use_container_width=True)
 
-                # residual distribution
-                df_res["residual"] = df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
-                fig_res = px.histogram(df_res, x="residual", nbins=30, title="Residual Distribution")
+                df_res["residual"] = (
+                    df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
+                )
+                fig_res = px.histogram(
+                    df_res,
+                    x="residual",
+                    nbins=30,
+                    title="Residual Distribution",
+                )
                 fig_res.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_res, use_container_width=True)
 
@@ -748,63 +1930,510 @@ elif page == "📈 Results":
             st.subheader("What the metrics mean")
             if task == "Classification":
                 st.markdown("- **Accuracy:** Overall fraction of correct predictions.")
-                st.markdown("- **Confusion Matrix:** Rows = true classes, Columns = predicted classes.")
-                st.markdown("- **Precision:** Of all predicted positive, how many were actually positive.")
-                st.markdown("- **Recall:** Of all actual positive samples, how many were found.")
-                st.markdown("- **F1-score:** Harmonic mean of precision and recall; balanced measure.")
+                st.markdown(
+                    "- **Confusion Matrix:** Rows = true classes, Columns = predicted classes."
+                )
+                st.markdown(
+                    "- **Precision:** Of all predicted positive, how many were actually positive."
+                )
+                st.markdown(
+                    "- **Recall:** Of all actual positive samples, how many were found."
+                )
+                st.markdown(
+                    "- **F1-score:** Harmonic mean of precision and recall; balanced measure."
+                )
             else:
-                st.markdown("- **RMSE:** Root Mean Squared Error — lower is better; same units as target.")
-                st.markdown("- **MAE:** Mean Absolute Error — average magnitude of errors.")
-                st.markdown("- **R²:** Proportion of variance explained by the model (1 is perfect).")
-            st.markdown("---")
-            st.markdown("**Feature importances** (Top 5)")
-            fi = results.get("feature_importances", [])
-            feat = results.get("X_columns", [])
-            if fi and feat:
-                df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False).head(5)
-                st.table(df_fi.reset_index(drop=True))
-            else:
-                st.info("No feature importances available.")
+                st.markdown(
+                    "- **RMSE:** Root Mean Squared Error — lower is better; same units as target."
+                )
+                st.markdown(
+                    "- **MAE:** Mean Absolute Error — average magnitude of errors."
+                )
+                st.markdown(
+                    "- **R²:** Proportion of variance explained by the model (1 is perfect)."
+                )
 
-# ----------------- INSIGHTS -----------------
-elif page == "🌿 Insights":
-    st.title("🌿 Soil Health Insights")
-    st.markdown("Automated soil health recommendations based on model outputs and feature signals.")
-    if st.session_state["results"] is None:
-        st.info("Train a model to get data-driven insights.")
-    else:
-        df = st.session_state["df"]
-        fi = st.session_state["results"].get("feature_importances", [])
-        feat = st.session_state["results"].get("X_columns", [])
-        if fi and feat:
-            df_fi = pd.DataFrame({"feature": feat, "importance": fi}).sort_values("importance", ascending=False)
-            st.subheader("Top Features Influencing Predictions")
-            for i, row in df_fi.head(5).iterrows():
-                st.write(f"- **{row['feature']}** (importance: {row['importance']:.3f}) — median: {df[row['feature']].median():.3f}")
-            st.markdown("### Recommendations")
-            st.write("The suggestions below are generic. Use domain expertise before applying changes to soils.")
-            if 'Nitrogen' in df.columns:
-                median_n = df['Nitrogen'].median()
-                if median_n < df['Nitrogen'].quantile(0.33):
-                    st.info("Nitrogen tends to be low — consider organic amendments like compost or legume cover crops.")
-                elif median_n > df['Nitrogen'].quantile(0.66):
-                    st.warning("Nitrogen tends to be high — evaluate fertilizer application and leaching risks.")
-                else:
-                    st.success("Nitrogen levels are moderate across samples.")
+        st.markdown("---")
+
+        st.subheader("🌳 Random Forest Feature Importance")
+        feat_names = results.get("X_columns", [])
+        fi_list = results.get("feature_importances", [])
+
+        if fi_list and feat_names:
+            fi_df = pd.DataFrame(
+                {"feature": feat_names, "importance": fi_list}
+            ).sort_values("importance", ascending=False)
+            fig_fi = px.bar(
+                fi_df,
+                x="importance",
+                y="feature",
+                orientation="h",
+                title="Mean Decrease in Impurity (Feature Importance)",
+            )
+            fig_fi.update_layout(template="plotly_dark", height=400)
+            st.plotly_chart(fig_fi, use_container_width=True)
+            st.dataframe(fi_df, use_container_width=True)
         else:
-            st.info("No model-based insights available yet. Train a model first.")
+            st.info("Feature importances not available for this run.")
 
-# ----------------- ABOUT / PROFILE -----------------
+        perm_data = results.get("permutation_importance")
+        if perm_data:
+            st.subheader("🔁 Permutation Importance (robust importance)")
+            perm_df = pd.DataFrame(perm_data)
+            perm_df = perm_df.sort_values("importance", ascending=False)
+            fig_perm = px.bar(
+                perm_df,
+                x="importance",
+                y="feature",
+                orientation="h",
+                title="Permutation Importance",
+            )
+            fig_perm.update_layout(template="plotly_dark", height=400)
+            st.plotly_chart(fig_perm, use_container_width=True)
+            st.dataframe(perm_df, use_container_width=True)
+        else:
+            st.info("Permutation importance not computed or unavailable.")
+
+        if fi_list and feat_names:
+            fi_pairs = list(zip(feat_names, fi_list))
+            fi_pairs.sort(key=lambda x: x[1], reverse=True)
+            top_feats = [name for name, _ in fi_pairs[:3]]
+            st.markdown(
+                f"_The model relies most on: **{', '.join(top_feats)}** when making predictions._"
+            )
+
+        st.markdown("---")
+
+        st.subheader("🔍 Prediction Explorer — Soil Health from Custom Sample")
+        model = st.session_state.get("model")
+        scaler = st.session_state.get("scaler")
+        df_full = st.session_state.get("df")
+
+        if not model or not scaler:
+            st.info(
+                "Train a model and keep it in memory to use the prediction explorer."
+            )
+        elif not feat_names:
+            st.info("Feature list is unavailable; retrain the model to populate it.")
+        elif df_full is None:
+            st.info("Original dataset not found; cannot derive input ranges.")
+        else:
+            with st.form("prediction_form"):
+                st.markdown(
+                    "Provide a hypothetical soil sample to see predicted fertility "
+                    "or Nitrogen level."
+                )
+                input_values = {}
+                for f in feat_names:
+                    if f in df_full.columns and pd.api.types.is_numeric_dtype(
+                        df_full[f]
+                    ):
+                        col_min = float(df_full[f].min())
+                        col_max = float(df_full[f].max())
+                        if col_min == col_max:
+                            col_min -= 0.1
+                            col_max += 0.1
+                        default_val = float(df_full[f].median())
+                        step = (col_max - col_min) / 100.0
+                        if step <= 0:
+                            step = 0.01
+                        input_values[f] = st.slider(
+                            f,
+                            min_value=float(col_min),
+                            max_value=float(col_max),
+                            value=float(default_val),
+                            step=float(step),
+                        )
+                    else:
+                        input_values[f] = st.number_input(f, value=0.0)
+
+                submitted = st.form_submit_button("Predict Soil Health")
+            if submitted:
+                sample_df = pd.DataFrame([input_values])
+                try:
+                    sample_scaled = scaler.transform(sample_df[feat_names])
+                    pred = model.predict(sample_scaled)[0]
+
+                    if task == "Classification":
+                        pred_label = str(pred)
+                        health_label, color, message = interpret_label(pred_label)
+                        st.markdown(
+                            f"**Predicted Fertility Class:** `{pred_label}`<br>"
+                            f"**Soil Health Interpretation:** **{health_label}** — {message}",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        pred_nitrogen = float(pred)
+                        st.markdown(
+                            f"**Predicted Nitrogen:** `{pred_nitrogen:.3f}` (same units as your dataset)"
+                        )
+                        if (
+                            df_full is not None
+                            and "Nitrogen" in df_full.columns
+                            and df_full["Nitrogen"].notna().sum() > 5
+                        ):
+                            q = df_full["Nitrogen"].quantile([0.33, 0.66])
+                            low_th, high_th = q.iloc[0], q.iloc[1]
+                            if pred_nitrogen <= low_th:
+                                fert = "Low"
+                            elif pred_nitrogen <= high_th:
+                                fert = "Moderate"
+                            else:
+                                fert = "High"
+                            health_label, color, message = interpret_label(fert)
+                            st.markdown(
+                                f"**Derived Fertility Category:** `{fert}`<br>"
+                                f"**Soil Health Interpretation:** **{health_label}** — {message}",
+                                unsafe_allow_html=True,
+                            )
+
+                    if fi_list and feat_names:
+                        fi_pairs = list(zip(feat_names, fi_list))
+                        fi_pairs.sort(key=lambda x: x[1], reverse=True)
+                        top_reasons = ", ".join(
+                            [name for name, _ in fi_pairs[:3]]
+                        )
+                        st.markdown(
+                            f"_Model explanation:_ This model is globally most sensitive "
+                            f"to **{top_reasons}** when predicting soil health."
+                        )
+                except Exception as e:
+                    st.error(f"Prediction failed: {e}")
+
+elif page == "🌿 Insights":
+    st.title("🌿 Soil Health Insights & Crop Recommendations")
+    if st.session_state["df"] is None:
+        st.info("Upload and preprocess a dataset first (Home).")
+    else:
+        df = st.session_state["df"].copy()
+        features = [
+            "pH",
+            "Nitrogen",
+            "Phosphorus",
+            "Potassium",
+            "Moisture",
+            "Organic Matter",
+        ]
+
+        st.session_state["location_tag"] = st.text_input(
+            "Optional location / farm name (for context in reports)",
+            value=st.session_state.get("location_tag", ""),
+        )
+        context_label = (
+            st.session_state["location_tag"].strip()
+            if st.session_state["location_tag"]
+            else "this dataset"
+        )
+
+        if all(f in df.columns for f in features):
+            median_row = df[features].median()
+            overall_score = compute_suitability_score(median_row, features=features)
+            label, color_hex = suitability_color(overall_score)
+            crops = recommend_crops_for_sample(median_row, top_n=3)
+            crop_list = ", ".join([c[0] for c in crops])
+
+            fertility_map = {
+                "Green": (
+                    "Good",
+                    "🟢",
+                    "Fertility Level: Good",
+                    "Soil health is optimal for cropping and sustainability.",
+                ),
+                "Orange": (
+                    "Moderate",
+                    "🟠",
+                    "Fertility Level: Moderate",
+                    "Soil is moderately fertile. Soil improvement can boost yield.",
+                ),
+                "Red": (
+                    "Poor",
+                    "🔴",
+                    "Fertility Level: Poor",
+                    "Soil has low fertility; significant amendments are needed.",
+                ),
+            }
+            level_text, circle, level_label, description = fertility_map[label]
+
+            st.markdown(
+                f"""
+            <div style="
+                border:2.5px solid {color_hex};
+                border-radius:18px;
+                background: linear-gradient(100deg, {color_hex}22 0%, #f4fff4 100%);
+                padding:28px 22px 16px 22px;
+                margin-bottom:34px;
+                box-shadow:0 0px 32px 0px {color_hex}33;
+                text-align:left;">
+                <h3 style='margin-top:0;margin-bottom:0.2em;'>
+                    {circle}
+                    <span style="
+                        color:{color_hex};
+                        font-size:33px;
+                        font-weight:bold;
+                        vertical-align:middle;">
+                        {level_label}
+                    </span>
+                </h3>
+                <div style='font-size:18px;font-weight:600;padding-top:2px;'>
+                    Soil health summary for <b>{context_label}</b>.
+                </div>
+                <div style='font-size:20px;font-weight:600;padding-top:6px;'>
+                    {description}
+                </div>
+                <div style='font-size:16px;padding-top:8px;'>
+                    <b>Recommended crops (overall suitability):</b> 
+                    <span style='color:{color_hex};font-weight:700'>{crop_list}</span>
+                </div>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+        st.subheader("Dataset overview")
+        st.write(f"Samples: {df.shape[0]}  — Columns: {df.shape[1]}")
+        st.markdown("---")
+
+        st.subheader("Sample-level suitability & agriculture validation")
+
+        display_cols = [
+            c
+            for c in [
+                "Province",
+                "pH",
+                "Nitrogen",
+                "Phosphorus",
+                "Potassium",
+                "Moisture",
+                "Organic Matter",
+                "Latitude",
+                "Longitude",
+                "Fertility_Level",
+            ]
+            if c in df.columns
+        ]
+
+        preview = df[display_cols].copy()
+        preview["suitability_score"] = preview.apply(
+            lambda r: compute_suitability_score(
+                r,
+                features=[
+                    "pH",
+                    "Nitrogen",
+                    "Phosphorus",
+                    "Potassium",
+                    "Moisture",
+                    "Organic Matter",
+                ],
+            ),
+            axis=1,
+        )
+        preview["suitability_label"] = preview["suitability_score"].apply(
+            lambda s: suitability_color(s)[0]
+        )
+        preview["suitability_hex"] = preview["suitability_score"].apply(
+            lambda s: suitability_color(s)[1]
+        )
+
+        def _rec_small(row):
+            s = recommend_crops_for_sample(row, top_n=3)
+            return ", ".join([f"{c} ({score:.2f})" for c, score in s])
+
+        preview["top_crops"] = preview.apply(lambda r: _rec_small(r), axis=1)
+
+        def agriculture_verdict(row):
+            score = row["suitability_score"]
+            label, hex_color = suitability_color(score)
+            crops = recommend_crops_for_sample(row, top_n=3)
+            crop_names = ", ".join([c[0] for c in crops])
+            if label == "Green":
+                verdict = (
+                    f"🟢 Soil is sustainable for cropping. "
+                    f"Ideal crops: {crop_names}."
+                )
+            elif label == "Orange":
+                verdict = (
+                    f"🟠 Soil is moderately suitable. "
+                    f"Consider minor fertilizer or pH adjustment. "
+                    f"Crops that may grow: {crop_names}."
+                )
+            else:
+                verdict = (
+                    f"🔴 Soil is NOT recommended for cropping without amendments. "
+                    f"Major improvement needed. Possible crops (with treatment): "
+                    f"{crop_names}."
+                )
+            return verdict
+
+        preview["verdict"] = preview.apply(agriculture_verdict, axis=1)
+
+        col_g, col_o, col_r = st.columns(3)
+        for label_name, col_obj in zip(
+            ["Green", "Orange", "Red"], [col_g, col_o, col_r]
+        ):
+            cnt = int((preview["suitability_label"] == label_name).sum())
+            col_obj.metric(f"{label_name} samples", cnt)
+
+        st.dataframe(
+            preview[
+                [
+                    col
+                    for col in [
+                        "Province",
+                        "pH",
+                        "Nitrogen",
+                        "Phosphorus",
+                        "Potassium",
+                        "Moisture",
+                        "Organic Matter",
+                        "Fertility_Level",
+                        "suitability_score",
+                        "suitability_label",
+                        "top_crops",
+                        "verdict",
+                    ]
+                    if col in preview.columns
+                ]
+            ],
+            use_container_width=True,
+        )
+        st.markdown("---")
+
+        if "Province" in preview.columns:
+            st.subheader("Per-province soil health summary")
+            prov_summary = (
+                preview.groupby("Province")
+                .agg(
+                    samples=("suitability_score", "count"),
+                    avg_suitability=("suitability_score", "mean"),
+                    green_samples=(
+                        "suitability_label",
+                        lambda x: (x == "Green").sum(),
+                    ),
+                    orange_samples=(
+                        "suitability_label",
+                        lambda x: (x == "Orange").sum(),
+                    ),
+                    red_samples=(
+                        "suitability_label",
+                        lambda x: (x == "Red").sum(),
+                    ),
+                )
+                .reset_index()
+            )
+            prov_summary["avg_suitability"] = prov_summary["avg_suitability"].round(3)
+            st.dataframe(prov_summary, use_container_width=True)
+            st.markdown("---")
+
+        st.markdown("### Soil Suitability Color Legend")
+        st.markdown(
+            """
+        <style>
+        .legend-table {
+            width: 97%;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.06);
+            border-radius: 11px;
+            border: 1.4px solid #eee;
+            box-shadow: 0 4px 16px #0001;
+            font-size:17px;
+        }
+        .legend-table td {
+            padding:10px 16px;
+        }
+        </style>
+        <table class="legend-table">
+          <tr>
+            <td><span style="color:#2ecc71;font-weight:900;font-size:20px;">🟢 Green</span></td>
+            <td><b>Good/Sustainable</b>. Soil is ideal for cropping.<br>
+            <b>Recommended crops:</b> Rice, Corn, Cassava, Vegetables, Banana, Coconut.</td>
+          </tr>
+          <tr>
+            <td><span style="color:#f39c12;font-weight:900;font-size:20px;">🟠 Orange</span></td>
+            <td><b>Moderate</b>. Soil is OK but may require improvement.<br>
+            <b>Actions:</b> Nutrient/fertilizer adjustment and checking pH.<br>
+            <b>Crops:</b> Corn, Cassava, selected vegetables.</td>
+          </tr>
+          <tr>
+            <td><span style="color:#e74c3c;font-weight:900;font-size:20px;">🔴 Red</span></td>
+            <td><b>Poor/Unsuitable</b>. Not recommended for cropping.<br>
+            <b>Actions:</b> Major improvement with organic matter, fertilizers, and pH correction.<br>
+            <b>Crops:</b> Only hardy types after soil amendment.</td>
+          </tr>
+        </table>
+        """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("---", unsafe_allow_html=True)
+
+        st.subheader("Detailed crop evaluation for a specific soil sample")
+        if df.shape[0] > 0:
+            idx = st.number_input(
+                "Select sample index (0-based)",
+                min_value=0,
+                max_value=int(df.shape[0] - 1),
+                value=0,
+                step=1,
+            )
+            sample_row = df.iloc[int(idx)]
+            eval_df = build_crop_evaluation_table(sample_row, top_n=6)
+            if not eval_df.empty:
+                st.dataframe(eval_df, use_container_width=True)
+            else:
+                st.info(
+                    "Unable to compute crop evaluation for this sample (missing values?)."
+                )
+        else:
+            st.info("No samples available for detailed crop evaluation.")
+
+        st.markdown("---")
+
+        st.subheader("Soil pattern clustering (K-Means)")
+        cluster_features = [f for f in features if f in df.columns]
+        if len(cluster_features) < 2:
+            st.info(
+                "Need at least two numeric soil parameters (e.g., pH and Nitrogen) "
+                "to run clustering."
+            )
+        else:
+            n_clusters = st.slider("Number of clusters", 2, 5, 3, step=1)
+            clustered_df, kmeans_model = run_kmeans_on_df(
+                df, cluster_features, n_clusters=n_clusters
+            )
+            if clustered_df is None:
+                st.info(
+                    "Not enough valid rows to run clustering with the selected number of clusters."
+                )
+            else:
+                counts = clustered_df["cluster"].value_counts().sort_index()
+                st.write("Cluster sizes:")
+                st.write(counts)
+
+                x_feat = cluster_features[0]
+                y_feat = cluster_features[1]
+                fig_cluster = px.scatter(
+                    clustered_df,
+                    x=x_feat,
+                    y=y_feat,
+                    color="cluster",
+                    title=f"K-Means clusters using {x_feat} vs {y_feat}",
+                )
+                fig_cluster.update_layout(template="plotly_dark")
+                st.plotly_chart(fig_cluster, use_container_width=True)
+
 elif page == "👤 About":
     st.title("👤 About the Makers")
-    st.markdown("Developed by:")
-    st.write("")  # spacing
-    col_a, col_b = st.columns([1,1])
+    st.markdown("<div style='font-size:19px;'>Developed by:</div>", unsafe_allow_html=True)
+    st.write("")
+    col_a, col_b = st.columns([1, 1])
     with col_a:
-        render_profile("Andre Oneal A. Plaza", "profile_andre", "upload_andre")
+        render_profile("Andre Oneal A. Plaza", "andre_oneal_a._plaza.png")
     with col_b:
-        render_profile("Rica Baliling", "profile_rica", "upload_rica")
-
+        render_profile("Rica Baliling", "rica_baliling.png")
     st.markdown("---")
-    st.markdown("all god to be glory")
+    st.markdown(
+        "<div style='font-size:15px;color:#cd5fff;font-weight:600;'>All glory to God.</div>",
+        unsafe_allow_html=True,
+    )
     st.write("Developed for a capstone project.")
+
