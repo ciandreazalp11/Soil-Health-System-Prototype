@@ -1129,7 +1129,7 @@ elif page == "🤖 Modeling":
         [
             OBJECTIVES[3],
             "Train a Random Forest for Fertility (Classification) or Nitrogen (Regression).",
-            "Optional: Train N/P/K nutrient-deficiency predictors (below).",
+            "Train N/P/K nutrient-level predictors (below).",
         ],
         next_hint="After training, go to 📈 Results to evaluate accuracy/precision and explore predictions.",
     )
@@ -1192,19 +1192,30 @@ elif page == "🤖 Modeling":
         )
         st.markdown("---", unsafe_allow_html=True)
 
+        fertility_derived_from_n = False
+
         if st.session_state["task_mode"] == "Classification":
+            # Prefer an existing fertility label (from dataset). Only derive it from Nitrogen if missing.
             if "Fertility_Level" not in df.columns and "Nitrogen" in df.columns:
                 df["Fertility_Level"] = create_fertility_label(df, col="Nitrogen", q=3)
+                fertility_derived_from_n = True
             y = df["Fertility_Level"] if "Fertility_Level" in df.columns else None
         else:
+            # Default regression target is Nitrogen
             y = df["Nitrogen"] if "Nitrogen" in df.columns else None
 
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
-        for loccol in ["Latitude", "Longitude"]:
+
+        # Remove location columns from feature list
+        for loccol in ["Latitude", "Longitude", "latitude", "longitude", "longitude_1", "longitude_2"]:
             if loccol in numeric_features:
                 numeric_features.remove(loccol)
-        if "Nitrogen" in numeric_features:
-            numeric_features.remove("Nitrogen")
+
+        # Remove Nitrogen only when it is the target (Regression) or when Fertility_Level was derived from Nitrogen
+        # (to avoid label leakage).
+        if st.session_state["task_mode"] == "Regression" or fertility_derived_from_n:
+            if "Nitrogen" in numeric_features:
+                numeric_features.remove("Nitrogen")
 
         st.subheader("Feature Selection")
         st.markdown("Select numeric features to include in the model.")
@@ -1229,9 +1240,38 @@ elif page == "🤖 Modeling":
             X_scaled_df = pd.DataFrame(X_scaled, columns=selected_features)
 
             test_size = st.slider("Test set fraction (%)", 10, 40, 20, step=5)
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_scaled_df, y, test_size=test_size / 100, random_state=42
-            )
+
+            # Keep class proportions in train/test for better evaluation on imbalanced data
+            stratify_y = y if st.session_state["task_mode"] == "Classification" else None
+            try:
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X_scaled_df,
+                    y,
+                    test_size=test_size / 100,
+                    random_state=42,
+                    stratify=stratify_y,
+                )
+            except Exception:
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X_scaled_df, y, test_size=test_size / 100, random_state=42
+                )
+
+            # High-class threshold (helps prevent "High" metrics from collapsing to zero on imbalanced data)
+            high_threshold = None
+            if st.session_state["task_mode"] == "Classification" and y is not None:
+                y_counts = pd.Series(y).value_counts(dropna=False)
+                try:
+                    if ("High" in y_counts.index.astype(str).tolist()) and (y_counts.min() / max(1, y_counts.max()) < 0.2):
+                        high_threshold = st.slider(
+                            "High-class threshold",
+                            min_value=0.05,
+                            max_value=0.50,
+                            value=0.20,
+                            step=0.05,
+                            help="Lower = more sensitive to High (higher recall). Higher = fewer High predictions (higher precision).",
+                        )
+                except Exception:
+                    high_threshold = None
 
             if st.button("🚀 Train Random Forest"):
                 if n_estimators > 300:
@@ -1242,11 +1282,21 @@ elif page == "🤖 Modeling":
                 with st.spinner("Training Random Forest..."):
                     time.sleep(0.25)
                     if st.session_state["task_mode"] == "Classification":
+                        # Handle class imbalance automatically (helps minority classes like "High")
+                        class_weight = None
+                        try:
+                            y_counts = pd.Series(y_train).value_counts()
+                            if y_counts.min() / max(1, y_counts.max()) < 0.2:
+                                class_weight = "balanced_subsample"
+                        except Exception:
+                            class_weight = None
+
                         model = RandomForestClassifier(
                             n_estimators=n_estimators,
                             max_depth=max_depth,
                             random_state=42,
                             n_jobs=-1,
+                            class_weight=class_weight,
                         )
                     else:
                         model = RandomForestRegressor(
@@ -1257,7 +1307,32 @@ elif page == "🤖 Modeling":
                         )
 
                     model.fit(X_train, y_train)
+
+                    # Default prediction
                     y_pred = model.predict(X_test)
+
+                    # Adjust decision boundary for the minority "High" class (cost-sensitive thresholding)
+                    if (
+                        st.session_state["task_mode"] == "Classification"
+                        and high_threshold is not None
+                        and hasattr(model, "predict_proba")
+                    ):
+                        try:
+                            proba = model.predict_proba(X_test)
+                            classes = list(model.classes_)
+                            if "High" in classes:
+                                hi = classes.index("High")
+                                adjusted = []
+                                for p in proba:
+                                    if p[hi] >= float(high_threshold):
+                                        adjusted.append("High")
+                                    else:
+                                        p2 = p.copy()
+                                        p2[hi] = -1.0
+                                        adjusted.append(classes[int(np.argmax(p2))])
+                                y_pred = np.array(adjusted)
+                        except Exception:
+                            pass
 
                     try:
                         cv_scores = cross_val_score(
@@ -1321,7 +1396,7 @@ elif page == "🤖 Modeling":
         # Objective 4 (Extension): Nutrient deficiency prediction
         # =====================
         st.markdown("---")
-        st.subheader("🧪 Nutrient Deficiency Prediction (Optional)")
+        st.subheader("🧪 Nutrient Deficiency Prediction")
         st.caption(
             "Objective 4 extension: train additional Random Forest regressors to **predict nutrient levels** "
             "(Nitrogen / Phosphorus / Potassium) and help flag potential deficiencies."
@@ -1695,131 +1770,14 @@ elif page == "📊 Visualization":
         # 🗺️ Spatial
         # =====================
         with tab_spatial:
-            st.subheader("Soil Health Classification Map (Random Forest)")
-            st.caption("Legend: 🟢 High • 🟠 Moderate • 🔴 Poor. Uses your trained Random Forest predictions and hides offshore/outside points.")
-
-            if not has_coords:
-                st.info("Latitude and Longitude columns are required to generate the Folium map.")
-            else:
-                model = st.session_state.get("model")
-                scaler = st.session_state.get("scaler")
-                trained_features = st.session_state.get("trained_on_features")
-                results = st.session_state.get("results")
-
-                if (
-                    model is not None
-                    and scaler is not None
-                    and trained_features is not None
-                    and all(f in df.columns for f in trained_features)
-                ):
-                    try:
-                        X_all = df[trained_features]
-                        X_scaled_all = scaler.transform(X_all)
-                        preds = model.predict(X_scaled_all)
-
-                        task = None
-                        if results and isinstance(results, dict) and "task" in results:
-                            task = results["task"]
-                        else:
-                            task = st.session_state.get("task_mode", "Classification")
-
-                        df_rf = df.copy()
-                        df_rf["RF_Prediction"] = preds
-
-                        if str(task).lower().startswith("class"):
-                            def _to_sustainability(v):
-                                s = str(v).strip().lower()
-                                if s in {"high"}:
-                                    return "High"
-                                if s in {"moderate", "medium"}:
-                                    return "Moderate"
-                                if s in {"poor", "low"}:
-                                    return "Poor"
-                                return str(v)
-
-                            df_rf["Sustainability"] = df_rf["RF_Prediction"].apply(_to_sustainability)
-                        else:
-                            p = pd.to_numeric(df_rf["RF_Prediction"], errors="coerce")
-                            q1, q2 = p.quantile([0.33, 0.66]).values
-
-                            def _bucket(val):
-                                if pd.isna(val):
-                                    return np.nan
-                                if val <= q1:
-                                    return "Poor"
-                                if val <= q2:
-                                    return "Moderate"
-                                return "High"
-
-                            df_rf["Sustainability"] = p.apply(_bucket)
-
-                        df_map = _filter_mindanao_land_only(df_rf).dropna(subset=["Sustainability"])
-
-                        if not df_map.empty:
-                            center_lat = float(df_map["Latitude"].mean())
-                            center_lon = float(df_map["Longitude"].mean())
-
-                            m = folium.Map(
-                                location=[center_lat, center_lon],
-                                zoom_start=7,
-                                tiles="CartoDB dark_matter",
-                                control_scale=True,
-                            )
-
-                            min_lat, max_lat = float(df_map["Latitude"].min()), float(df_map["Latitude"].max())
-                            min_lon, max_lon = float(df_map["Longitude"].min()), float(df_map["Longitude"].max())
-                            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
-                            m.options["maxBounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
-
-                            color_map = {"High": "#2ecc71", "Moderate": "#f39c12", "Poor": "#e74c3c"}
-
-                            for _, r in df_map.iterrows():
-                                cls = str(r["Sustainability"]).strip().title()
-                                if cls not in color_map:
-                                    cls = "Moderate"
-                                folium.CircleMarker(
-                                    location=[float(r["Latitude"]), float(r["Longitude"])],
-                                    radius=4,
-                                    color=color_map[cls],
-                                    fill=True,
-                                    fill_color=color_map[cls],
-                                    fill_opacity=0.85,
-                                    weight=0,
-                                ).add_to(m)
-
-                            legend_html = '''
-                            <div style="
-                                position: fixed;
-                                bottom: 30px;
-                                left: 30px;
-                                z-index: 9999;
-                                background: rgba(0,0,0,0.65);
-                                padding: 12px 14px;
-                                border-radius: 10px;
-                                color: white;
-                                font-size: 14px;
-                                line-height: 18px;
-                                ">
-                                <div style="font-weight:700; margin-bottom:6px;">Soil Health (Sustainability)</div>
-                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#2ecc71;margin-right:8px;"></span>High</div>
-                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#f39c12;margin-right:8px;"></span>Moderate</div>
-                                <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e74c3c;margin-right:8px;"></span>Poor</div>
-                            </div>
-                            '''
-                            m.get_root().html.add_child(folium.Element(legend_html))
-
-                            st_folium(m, width=1024, height=520)
-                        else:
-                            st.info("No valid Mindanao land points to display after filtering coordinates.")
-                    except Exception as e:
-                        st.warning(f"Unable to generate the Folium map from Random Forest predictions: {e}")
-                else:
-                    st.info("To enable this map, train a model first in the '🤖 Modeling' page.")
+            # =====================
+            # Folium Fertility & Nutrient Maps
+            # =====================
 
             # ---- Notebook spatial visuals ----
             st.markdown("---")
             st.subheader("📒 Notebook Spatial Visuals")
-            st.caption("These replicate the notebook’s geo scatter and fertility folium maps, with the same land-only filtering to hide offshore points.")
+            st.caption("These replicate the notebook’s geo scatter and fertility folium maps, to hide offshore/outside points.")
 
             import matplotlib.pyplot as plt
             try:
@@ -1862,14 +1820,34 @@ elif page == "📊 Visualization":
                             if dtmp.empty:
                                 continue
                             fig, ax = plt.subplots(figsize=(10, 6))
+                            # Bin values into 3 levels so colors are meaningful and consistent
+                            try:
+                                q1, q2 = dtmp[n].quantile([0.33, 0.66]).values
+
+                                def _bin(v):
+                                    if pd.isna(v):
+                                        return np.nan
+                                    if v <= q1:
+                                        return "Low"
+                                    if v <= q2:
+                                        return "Moderate"
+                                    return "High"
+
+                                dtmp["Level"] = dtmp[n].apply(_bin)
+                            except Exception:
+                                dtmp["Level"] = "Moderate"
+
+                            palette = {"Low": "red", "Moderate": "orange", "High": "green"}
+
                             sns.scatterplot(
                                 data=dtmp,
                                 x=lon_col,
                                 y=lat_col,
-                                size=n,
-                                sizes=(20, 250),
-                                alpha=0.7,
+                                hue="Level",
+                                palette=palette,
+                                alpha=0.75,
                                 ax=ax,
+                                legend=True,
                             )
                             ax.set_title(f"Geographical Distribution of {n}")
                             ax.set_xlabel("Longitude")
@@ -1879,8 +1857,9 @@ elif page == "📊 Visualization":
                             st.caption(f"Geo scatter for **{n}**; marker size reflects concentration.")
 
             # Fertility Folium maps (overall + by class) with land filtering
-            with st.expander("Fertility Folium Maps (land-only)", expanded=False):
-                st.markdown("**What it shows:** interactive fertility points (overall + per class) with popups. Offshore points are filtered out.")
+            with st.expander("Fertility Folium Maps", expanded=False):
+                st.markdown("**What it shows:** interactive fertility maps using your dataset’s fertility labels (Green/Orange/Red).")
+
                 if fert_col is None:
                     st.info("Fertility label not found (expected `fertility_class` or `Fertility_Level`).")
                 elif lat_col is None or lon_col is None:
@@ -1890,30 +1869,41 @@ elif page == "📊 Visualization":
 
                     base = df.dropna(subset=[lat_col, lon_col, fert_col]).copy()
 
-                    # Standardize columns so we can apply the same Mindanao land-only filter
+                    # Keep the view clean by removing offshore points (does not change your main dataset)
                     base_std = base.rename(columns={lat_col: "Latitude", lon_col: "Longitude"}).copy()
                     base_std = _filter_mindanao_land_only(base_std)
 
-                    # Map back to original names (for popups/labels)
                     base_std[lat_col] = base_std["Latitude"]
                     base_std[lon_col] = base_std["Longitude"]
 
-                    def _render_folium_map(sub_df, title):
+                    PH_BOUNDS = [[4.5, 116.8], [21.4, 127.1]]  # Philippines bounding box
+
+                    def _render_folium_map(sub_df, title, description):
+                        st.markdown(f"### {title}")
+                        st.caption(description)
+
                         if sub_df.empty:
-                            st.warning(f"No rows available for: {title}")
+                            st.warning("No rows available for this map.")
                             return
 
                         center_lat = float(sub_df[lat_col].mean())
                         center_lon = float(sub_df[lon_col].mean())
-                        m = folium.Map(location=[center_lat, center_lon], zoom_start=8)
 
-                        min_lat, max_lat = float(sub_df[lat_col].min()), float(sub_df[lat_col].max())
-                        min_lon, max_lon = float(sub_df[lon_col].min()), float(sub_df[lon_col].max())
-                        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
-                        m.options["maxBounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
+                        m = folium.Map(
+                            location=[center_lat, center_lon],
+                            zoom_start=7,
+                            tiles="OpenStreetMap",
+                            control_scale=True,
+                            min_zoom=5,
+                            max_zoom=14,
+                        )
+
+                        # Lock map interaction to the Philippines (prevents zooming/panning far away)
+                        m.options["maxBounds"] = PH_BOUNDS
+                        m.options["maxBoundsViscosity"] = 1.0
 
                         for _, row in sub_df.iterrows():
-                            fert = str(row[fert_col])
+                            fert = str(row[fert_col]).strip().title()
                             col = color_map.get(fert, "blue")
                             popup = (
                                 f"<b>Fertility:</b> {fert}<br>"
@@ -1922,26 +1912,84 @@ elif page == "📊 Visualization":
                                 f"<b>K:</b> {row.get('Potassium', np.nan)}"
                             )
                             folium.CircleMarker(
-                                location=[row[lat_col], row[lon_col]],
+                                location=[float(row[lat_col]), float(row[lon_col])],
                                 radius=5,
                                 color=col,
                                 fill=True,
                                 fill_color=col,
-                                fill_opacity=0.7,
+                                fill_opacity=0.75,
                                 popup=folium.Popup(popup, max_width=300),
                             ).add_to(m)
 
-                        st.markdown(f"**{title}**")
+                        # Legend
+                        legend_html = """
+                        <div style="
+                            position: fixed;
+                            bottom: 30px;
+                            left: 30px;
+                            z-index: 9999;
+                            background: rgba(255,255,255,0.92);
+                            padding: 10px 12px;
+                            border-radius: 10px;
+                            color: #111;
+                            font-size: 13px;
+                            line-height: 18px;
+                            border: 1px solid rgba(0,0,0,0.15);
+                            ">
+                            <div style="font-weight:700; margin-bottom:6px;">Fertility Level</div>
+                            <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:green;margin-right:8px;"></span>High</div>
+                            <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:orange;margin-right:8px;"></span>Moderate</div>
+                            <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:red;margin-right:8px;"></span>Low</div>
+                        </div>
+                        """
+                        m.get_root().html.add_child(folium.Element(legend_html))
+
                         st_folium(m, width=1024, height=520)
-                        st.caption("Interactive map with popups (land-only filtered).")
 
-                    _render_folium_map(base_std, "Overall Fertility Map (All Classes)")
+                    # 3 maps: High, Moderate, Low (stacked one-by-one)
+                    _render_folium_map(
+                        base_std[base_std[fert_col].astype(str).str.title() == "High"],
+                        "Map 1: High Fertility (Green)",
+                        "Green points indicate high fertility areas—generally suitable for nutrient-demanding crops.",
+                    )
+                    _render_folium_map(
+                        base_std[base_std[fert_col].astype(str).str.title() == "Moderate"],
+                        "Map 2: Moderate Fertility (Orange)",
+                        "Orange points indicate moderate fertility—productive with balanced fertilization and soil management.",
+                    )
+                    _render_folium_map(
+                        base_std[base_std[fert_col].astype(str).str.title() == "Low"],
+                        "Map 3: Low Fertility (Red)",
+                        "Red points indicate low fertility—apply soil amendments or choose hardy crops.",
+                    )
 
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        _render_folium_map(base_std[base_std[fert_col].astype(str) == "High"], "High Fertility Map")
-                    with c2:
-                        _render_folium_map(base_std[base_std[fert_col].astype(str) == "Moderate"], "Moderate Fertility Map")
+                    st.markdown("---")
+                    st.subheader("Crop Guide by Map Color")
+
+                    crop_guide = pd.DataFrame(
+                        [
+                            {
+                                "Color": "Green",
+                                "Fertility Level": "High",
+                                "Suggested Crops": "Rice, corn, vegetables, banana",
+                                "Why": "High nutrient availability supports high-demand crops and intensive production.",
+                            },
+                            {
+                                "Color": "Orange",
+                                "Fertility Level": "Moderate",
+                                "Suggested Crops": "Corn, legumes (mungbean/peanut), coconut, cassava",
+                                "Why": "Moderate nutrients—works well with balanced fertilization and organic matter improvement.",
+                            },
+                            {
+                                "Color": "Red",
+                                "Fertility Level": "Low",
+                                "Suggested Crops": "Cassava, sweet potato, peanut, coconut (with amendments)",
+                                "Why": "Low nutrients—choose hardy crops and improve soil using compost/lime/fertilizer as needed.",
+                            },
+                        ]
+                    )
+                    st.dataframe(crop_guide, use_container_width=True)
+
 
         # =====================
         # 🧩 Clusters
@@ -2349,7 +2397,7 @@ elif page == "📈 Results":
         # Objective 4 (Extension): Nutrient deficiency explorer (based on trained nutrient models)
         # =====================
         st.markdown("---")
-        st.subheader("🧪 Nutrient Deficiency Explorer (Optional)")
+        st.subheader("🧪 Nutrient Deficiency Explorer")
         st.caption(
             "If you trained the optional nutrient predictors in 🤖 Modeling, you can use them here to estimate "
             "N/P/K levels and flag potential nutrient gaps."
@@ -2361,7 +2409,7 @@ elif page == "📈 Results":
         df_full = st.session_state.get("df")
 
         if not nutrient_models:
-            st.info("No nutrient predictors found. (Optional) Train them in 🤖 Modeling → 'Nutrient Deficiency Prediction'.")
+            st.info("No nutrient predictors found. Train them in 🤖 Modeling → 'Nutrient Deficiency Prediction'.")
         elif df_full is None:
             st.info("Dataset not found in session; cannot derive input ranges for nutrient explorer.")
         else:
@@ -2468,7 +2516,7 @@ elif page == "🌿 Insights":
         ]
 
         st.session_state["location_tag"] = st.text_input(
-            "Optional location / farm name (for context in reports)",
+            "Location / farm name (for context in reports)",
             value=st.session_state.get("location_tag", ""),
         )
         context_label = (
