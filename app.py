@@ -2263,7 +2263,6 @@ elif page == "📈 Results":
                     )
                     fig1.update_layout(template="plotly_dark")
                     st.plotly_chart(fig1, use_container_width=True)
-                st.caption("**Actual vs Predicted:** Points close to the diagonal line mean accurate predictions. Systematic offsets (points consistently above/below) indicate bias; wide scatter indicates higher error.")
                 except Exception:
                     fig1 = px.scatter(
                         df_res,
@@ -2979,4 +2978,3 @@ elif page == "👤 About":
         unsafe_allow_html=True,
     )
     st.write("Developed for a capstone project.")
-
