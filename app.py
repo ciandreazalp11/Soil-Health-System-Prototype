@@ -1004,19 +1004,6 @@ def upload_and_preprocess_widget():
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
             download_df_button(df)
-            st.markdown("---")
-            st.markdown(
-                "When you're ready you can go straight to Modeling or Visualization:"
-            )
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("➡️ Proceed to Modeling"):
-                    st.session_state["page_override"] = "🤖 Modeling"
-                    st.experimental_rerun()
-            with col2:
-                if st.button("➡️ Proceed to Visualization"):
-                    st.session_state["page_override"] = "📊 Visualization"
-                    st.experimental_rerun()
         else:
             st.error(
                 "No valid sheets processed. Check file formats and column headers."
