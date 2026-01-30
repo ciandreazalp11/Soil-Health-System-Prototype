@@ -885,6 +885,7 @@ def upload_and_preprocess_widget():
             f"{st.session_state['df'].shape[1]} cols)."
         )
         st.dataframe(st.session_state["df"].head())
+        st.caption("**Dataset preview (first rows):** Use this to confirm the file loaded correctly (columns, units, and any missing values) before moving to modeling/visuals.")
         if st.button("🔁 Clear current dataset"):
             st.session_state["df"] = None
             st.session_state["results"] = None
@@ -1004,6 +1005,7 @@ def upload_and_preprocess_widget():
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
             download_df_button(df)
+            st.caption("**Preprocessed preview:** This is the cleaned/standardized version the models will use. If something looks wrong here (e.g., columns missing), adjust preprocessing or your input file.")
         else:
             st.error(
                 "No valid sheets processed. Check file formats and column headers."
@@ -1513,6 +1515,7 @@ elif page == "🤖 Modeling":
 
                                 st.success("✅ Nutrient predictors trained and saved in session.")
                                 st.dataframe(pd.DataFrame(metrics).T, use_container_width=True)
+                                st.caption("**Nutrient model metrics:** Higher **R²** and lower **RMSE/MAE** indicate better predictions for that nutrient. Use this to compare which nutrient is easiest/hardest to predict from your features.")
 
 elif page == "📊 Visualization":
     st.title("📊 Visual Analytics")
@@ -1782,6 +1785,7 @@ elif page == "📊 Visualization":
                         st.info("No correlated pairs meet the threshold.")
                     else:
                         st.dataframe(pairs[["Feature1", "Feature2", "Correlation"]], use_container_width=True)
+                        st.caption("**Highly correlated pairs:** Values near **+1/-1** mean the two features move together strongly. Very high absolute correlation can suggest redundancy (you may keep one) or a meaningful relationship worth discussing.")
                         for _, r in pairs.iterrows():
                             f1, f2, cval = r["Feature1"], r["Feature2"], r["Correlation"]
                             dtmp = df[[f1, f2]].dropna()
@@ -2014,6 +2018,7 @@ elif page == "📊 Visualization":
                         ]
                     )
                     st.dataframe(crop_guide, use_container_width=True)
+                    st.caption("**Crop guide by color:** A quick reference mapping each suitability color (Green/Orange/Red) to example crops. Use this table to interpret the map colors in practical agricultural terms.")
 
 
         # =====================
@@ -2147,6 +2152,7 @@ elif page == "📈 Results":
         metrics_col, explain_col = st.columns([2, 1])
         with metrics_col:
             st.subheader("Performance Metrics")
+            st.caption("These scores summarize how well the model performs on the **test set**. Use them to justify model reliability for Objective 5 (precision/evaluation).")
             if task == "Classification":
                 try:
                     acc = accuracy_score(y_test, y_pred)
@@ -2167,6 +2173,7 @@ elif page == "📈 Results":
                     )
                     fig_cm.update_layout(template="plotly_dark", height=350)
                     st.plotly_chart(fig_cm, use_container_width=True)
+                    st.caption("**Confusion Matrix:** Rows are actual classes and columns are predicted classes. Values on the **diagonal** are correct predictions; off-diagonals show where the model confuses classes (e.g., High mislabeled as Moderate).")
                 except Exception:
                     st.write("Confusion matrix not available")
 
@@ -2188,6 +2195,7 @@ elif page == "📈 Results":
                         [c for c in cols_order if c in rep_df.columns]
                     ]
                     st.dataframe(rep_df[cols_order], use_container_width=True)
+                    st.caption("**How to read:** **Precision** = correctness when predicting a class; **Recall** = how many real cases were found; **F1** balances both. If **High** recall is low/zero, the model is missing High samples (often due to imbalance).")
                     # --- NEW: Classification metrics chart (per-class) ---
                     try:
                         plot_df = rep_df.copy()
@@ -2209,6 +2217,7 @@ elif page == "📈 Results":
                             fig_rep.update_yaxes(range=[0, 1])
                             fig_rep.update_layout(xaxis_title="", yaxis_title="Score (0–1)")
                             st.plotly_chart(fig_rep, use_container_width=True)
+                        st.caption("**Per-class metrics:** Compare Precision/Recall/F1 across Low/Moderate/High. A low **High** bar usually indicates class imbalance—use it to justify balancing/threshold tuning in your methodology.")
                     except Exception:
                         pass
                     # --- END NEW ---
@@ -2233,6 +2242,7 @@ elif page == "📈 Results":
                         {"Metric": "MAE", "Mean": cv.get("mae_mean"), "Std": cv.get("mae_std")},
                     ])
                     st.dataframe(cv_tbl, use_container_width=True)
+                    st.caption("**Cross-validation (mean ± std):** Shows average performance across multiple splits. Lower **RMSE/MAE** and higher **R²** mean better generalization; a large **std** suggests unstable performance across folds.")
 
 
                 df_res = pd.DataFrame(
@@ -2240,6 +2250,7 @@ elif page == "📈 Results":
                 )
                 st.markdown("**Sample predictions**")
                 st.dataframe(df_res.head(10), use_container_width=True)
+                st.caption("**Sample predictions:** Compare Actual vs Predicted values. Large gaps indicate where the model struggles; these can often be linked to unusual soil conditions or outlier inputs.")
 
                 st.markdown("**Actual vs Predicted**")
                 try:
@@ -2252,6 +2263,7 @@ elif page == "📈 Results":
                     )
                     fig1.update_layout(template="plotly_dark")
                     st.plotly_chart(fig1, use_container_width=True)
+                st.caption("**Actual vs Predicted:** Points close to the diagonal line mean accurate predictions. Systematic offsets (points consistently above/below) indicate bias; wide scatter indicates higher error.")
                 except Exception:
                     fig1 = px.scatter(
                         df_res,
@@ -2261,6 +2273,7 @@ elif page == "📈 Results":
                     )
                     fig1.update_layout(template="plotly_dark")
                     st.plotly_chart(fig1, use_container_width=True)
+                st.caption("**Actual vs Predicted:** Points close to the diagonal line mean accurate predictions. Systematic offsets (points consistently above/below) indicate bias; wide scatter indicates higher error.")
 
                 df_res["residual"] = (
                     df_res["Actual_Nitrogen"] - df_res["Predicted_Nitrogen"]
@@ -2273,6 +2286,7 @@ elif page == "📈 Results":
                 )
                 fig_res.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_res, use_container_width=True)
+                st.caption("**Residuals (errors):** Centered around 0 is ideal. A wide spread means larger errors; strong skew may indicate the model struggles more for low or high nitrogen ranges.")
 
         with explain_col:
             st.subheader("What the metrics mean")
@@ -2304,6 +2318,7 @@ elif page == "📈 Results":
         st.markdown("---")
 
         st.subheader("🌳 Random Forest Feature Importance")
+        st.caption("**Interpretation:** This explains which inputs the trained forest relied on most. Use it to support Objective 3 (major parameters) and to sanity-check that the model focuses on meaningful soil factors.")
         feat_names = results.get("X_columns", [])
         fi_list = results.get("feature_importances", [])
 
@@ -2320,13 +2335,16 @@ elif page == "📈 Results":
             )
             fig_fi.update_layout(template="plotly_dark", height=400)
             st.plotly_chart(fig_fi, use_container_width=True)
+            st.caption("**Feature importance (MDI):** Features higher on the chart contribute more to the forest’s decisions. Treat this as a *ranking*, not a causal claim (correlated features can share importance).")
             st.dataframe(fi_df, use_container_width=True)
+            st.caption("**Importance table:** Same ranking as the chart in numeric form. Use this for reporting (e.g., top 5 drivers) in your thesis discussion.")
         else:
             st.info("Feature importances not available for this run.")
 
         perm_data = results.get("permutation_importance")
         if perm_data:
             st.subheader("🔁 Permutation Importance (robust importance)")
+            st.caption("**Interpretation:** A feature is important if shuffling it causes a noticeable performance drop. This is often a more defensible importance measure for a thesis.")
             perm_df = pd.DataFrame(perm_data)
             perm_df = perm_df.sort_values("importance", ascending=False)
             fig_perm = px.bar(
@@ -2338,7 +2356,9 @@ elif page == "📈 Results":
             )
             fig_perm.update_layout(template="plotly_dark", height=400)
             st.plotly_chart(fig_perm, use_container_width=True)
+            st.caption("**Permutation importance:** Measures how much performance drops when a feature is shuffled. This is usually more reliable than MDI when features are correlated.")
             st.dataframe(perm_df, use_container_width=True)
+            st.caption("**Permutation table:** Bigger values mean the model depends more on that feature. Near-zero importance suggests the feature adds little predictive value in this model run.")
         else:
             st.info("Permutation importance not computed or unavailable.")
 
@@ -2376,10 +2396,12 @@ elif page == "📈 Results":
                         plt.figure()
                         shap.summary_plot(shap_vals, X_explain, show=False)
                         st.pyplot(plt.gcf(), clear_figure=True)
+                        st.caption("**SHAP summary (beeswarm):** Shows how features push predictions higher/lower across many samples. Wider spread means the feature has stronger influence.")
 
                         plt.figure()
                         shap.summary_plot(shap_vals, X_explain, plot_type="bar", show=False)
                         st.pyplot(plt.gcf(), clear_figure=True)
+                        st.caption("**SHAP importance (bar):** Average absolute impact of each feature. Use this as an interpretable ranking to support Objective 3 (major influencing parameters).")
                     except Exception as e:
                         st.info(f"SHAP explanation could not be generated: {e}")
 
@@ -2607,6 +2629,7 @@ elif page == "📈 Results":
                     if rows:
                         out_df = pd.DataFrame(rows)
                         st.dataframe(out_df, use_container_width=True)
+                        st.caption("**Nutrient status table:** Predicted nutrient levels are flagged against your dataset-based thresholds (Low/Moderate/High). Use this to quickly spot which nutrients may be limiting for a chosen sample.")
 
                         st.markdown("**General guidance (non-prescriptive):**")
                         st.markdown("- **Low Nitrogen** → consider organic matter, legume rotation, or N fertilization (crop-dependent).")
@@ -2812,6 +2835,7 @@ elif page == "🌿 Insights":
             ],
             use_container_width=True,
         )
+        st.caption("**Soil health preview:** Each row shows the computed suitability score/label (Green/Orange/Red) and suggested crop groupings. Use this to verify the scoring makes sense before summarizing by province.")
         st.markdown("---")
 
         if "Province" in preview.columns:
@@ -2838,6 +2862,7 @@ elif page == "🌿 Insights":
             )
             prov_summary["avg_suitability"] = prov_summary["avg_suitability"].round(3)
             st.dataframe(prov_summary, use_container_width=True)
+            st.caption("**Province summary:** Aggregates average suitability and counts per color. This helps compare areas and identify where soil improvement programs may be prioritized.")
             st.markdown("---")
 
         st.markdown("### Soil Suitability Color Legend")
@@ -2895,6 +2920,7 @@ elif page == "🌿 Insights":
             eval_df = build_crop_evaluation_table(sample_row, top_n=6)
             if not eval_df.empty:
                 st.dataframe(eval_df, use_container_width=True)
+                st.caption("**Crop suitability table:** Ranks crops for the selected sample based on your scoring logic. Higher scores indicate better match to the soil conditions represented by that row.")
             else:
                 st.info(
                     "Unable to compute crop evaluation for this sample (missing values?)."
@@ -2936,6 +2962,7 @@ elif page == "🌿 Insights":
                 )
                 fig_cluster.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_cluster, use_container_width=True)
+                st.caption("**Clusters:** Each color is a group of samples with similar soil/environment patterns based on the selected features. Use this to discuss natural groupings or zones in your study area.")
 
 elif page == "👤 About":
     st.title("👤 About the Makers")
