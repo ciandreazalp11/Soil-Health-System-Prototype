@@ -316,7 +316,6 @@ def render_objective_banner(step_title: str, bullets: list[str], next_hint: str 
         unsafe_allow_html=True,
     )
 
-def render_workflow_tracker_sidebar() -> None:
     """Small, non-intrusive workflow tracker in the sidebar."""
     done = _workflow_infer_completion()
 
@@ -476,9 +475,7 @@ with st.sidebar:
         },
     )
     st.write("---")
-    render_workflow_tracker_sidebar()
     st.markdown(
-        f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>",
         unsafe_allow_html=True,
     )
     if st.session_state["last_sidebar_selected"] != selected:
@@ -1068,10 +1065,28 @@ def render_profile(name, asset_filename):
     )
 
     asset_path = f"assets/{asset_filename}"
+    # Try multiple locations so profile images show both locally and on Streamlit Cloud
+    candidate_paths = [asset_path, asset_filename]
+    # If assets/ exists, try any image containing the surname token
     try:
-        image = Image.open(asset_path)
+        if os.path.isdir('assets'):
+            token = name.lower().split()[-1] if name else ''
+            for fn in os.listdir('assets'):
+                if token and token in fn.lower() and fn.lower().endswith(('.png','.jpg','.jpeg','.webp')):
+                    candidate_paths.insert(0, f"assets/{fn}")
+    except Exception:
+        pass
+    try:
+        chosen_path = None
+        for p in candidate_paths:
+            if os.path.exists(p):
+                chosen_path = p
+                break
+        if chosen_path is None:
+            raise FileNotFoundError(f"Profile image not found. Expected in assets/ or app folder: {asset_filename}")
+        image = Image.open(chosen_path)
         buf = BytesIO()
-        image.save(buf, format="PNG", unsafe_allow_html=True)
+        image.save(buf, format="PNG")
         img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         img_html = f'<img src="data:image/png;base64,{img_b64}" alt="profile" />'
     except Exception:
