@@ -239,6 +239,118 @@ if "last_sidebar_selected" not in st.session_state:
 if "location_tag" not in st.session_state:
     st.session_state["location_tag"] = ""
 
+
+if "workflow" not in st.session_state:
+    st.session_state["workflow"] = {}
+if "nutrient_models" not in st.session_state:
+    st.session_state["nutrient_models"] = {}   # e.g. {"Nitrogen": model, "Phosphorus": model, "Potassium": model}
+if "nutrient_scalers" not in st.session_state:
+    st.session_state["nutrient_scalers"] = {}
+if "nutrient_features" not in st.session_state:
+    st.session_state["nutrient_features"] = {}
+
+# =========================
+# WORKFLOW (Objectives 1–5) helper utilities
+# Goal: preserve your original pages/design, but add a clear "flow" feeling
+# without removing any existing features.
+# =========================
+
+OBJECTIVES = [
+    "1) Gather & consolidate high-resolution environmental and soil data",
+    "2) Preprocess & scan data through machine learning processes",
+    "3) Identify major soil parameters/trends influencing soil health & productivity",
+    "4) Formulate predictive models for fertility & nutrient deficiency",
+    "5) Evaluate the model for precision",
+]
+
+def _workflow_state() -> dict:
+    # Single dict so it's easy to reset/extend later.
+    if "workflow" not in st.session_state or not isinstance(st.session_state["workflow"], dict):
+        st.session_state["workflow"] = {}
+    return st.session_state["workflow"]
+
+def _workflow_reset() -> None:
+    st.session_state["workflow"] = {}
+
+def _workflow_mark(**kwargs) -> None:
+    wf = _workflow_state()
+    wf.update({k: bool(v) for k, v in kwargs.items()})
+
+def _workflow_is_done(key: str) -> bool:
+    return bool(_workflow_state().get(key, False))
+
+def _workflow_infer_completion() -> dict:
+    """Infer completion signals from existing session state (no new requirements)."""
+    df_ok = st.session_state.get("df") is not None
+    model_ok = st.session_state.get("model") is not None
+    results_ok = st.session_state.get("results") is not None
+
+    inferred = {
+        "obj1_data_loaded": df_ok,
+        # obj2 is explicitly marked in upload_and_preprocess_widget(), but we fall back to df presence.
+        "obj2_preprocessed": bool(_workflow_is_done("obj2_preprocessed") or df_ok),
+        # obj3 can be satisfied by EDA/Feature importance views. We'll mark it in Visualization/Results pages.
+        "obj3_params_identified": bool(_workflow_is_done("obj3_params_identified")),
+        "obj4_model_trained": bool(_workflow_is_done("obj4_model_trained") or model_ok),
+        "obj5_evaluated": bool(_workflow_is_done("obj5_evaluated") or results_ok),
+    }
+    return inferred
+
+def render_objective_banner(step_title: str, bullets: list[str], next_hint: str | None = None) -> None:
+    theme = st.session_state.get("current_theme", theme_classification)
+    border = theme.get("primary_color", "#81c784")
+    bg = "rgba(255,255,255,0.10)"
+    text = theme.get("text_color", "#e0ffe0")
+
+    items = "".join([f"<li style='margin-bottom:6px;'>{b}</li>" for b in bullets])
+    hint_html = f"<div style='margin-top:10px;opacity:0.95;'><b>Next:</b> {next_hint}</div>" if next_hint else ""
+
+    st.markdown(
+        f"""
+        <div style="border:1.5px solid {border}; border-radius:16px; padding:14px 16px; background:{bg}; color:{text};">
+          <div style="font-size:18px; font-weight:800; margin-bottom:8px;">{step_title}</div>
+          <ul style="margin:0 0 0 18px; padding:0;">{items}</ul>
+          {hint_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def render_workflow_tracker_sidebar() -> None:
+    """Small, non-intrusive workflow tracker in the sidebar."""
+    done = _workflow_infer_completion()
+
+    def _row(label, ok):
+        icon = "✅" if ok else "⬜"
+        return f"{icon} {label}"
+
+    st.markdown("### ✅ Objectives Flow")
+    st.caption("Follow the steps (1→5). Your progress is remembered while the app is running.")
+
+    st.write(_row("1. Data gathering & consolidation", done["obj1_data_loaded"]))
+    st.write(_row("2. Preprocessing & scanning", done["obj2_preprocessed"]))
+    st.write(_row("3. Key parameters & trends", done["obj3_params_identified"]))
+    st.write(_row("4. Predictive modeling", done["obj4_model_trained"]))
+    st.write(_row("5. Precision / evaluation", done["obj5_evaluated"]))
+
+    st.markdown("##### Jump to step")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("1–2 Home", use_container_width=True):
+            st.session_state["page_override"] = "🏠 Home"
+            st.experimental_rerun()
+        if st.button("4 Model", use_container_width=True):
+            st.session_state["page_override"] = "🤖 Modeling"
+            st.experimental_rerun()
+    with c2:
+        if st.button("3 Visuals", use_container_width=True):
+            st.session_state["page_override"] = "📊 Visualization"
+            st.experimental_rerun()
+        if st.button("5 Results", use_container_width=True):
+            st.session_state["page_override"] = "📈 Results"
+            st.experimental_rerun()
+
+
 # === APPLY THEME (FIXED, CLEAN, WORKING) ===
 
 # === STYLE INJECTION HELPER ===
@@ -364,6 +476,7 @@ with st.sidebar:
         },
     )
     st.write("---")
+    render_workflow_tracker_sidebar()
     st.markdown(
         f"<div style='font-size:12px;color:{st.session_state['current_theme']['text_color']};opacity:0.85'>Developed for sustainable agriculture</div>",
         unsafe_allow_html=True,
@@ -777,6 +890,7 @@ def upload_and_preprocess_widget():
             st.session_state["results"] = None
             st.session_state["model"] = None
             st.session_state["scaler"] = None
+            _workflow_reset()
             st.experimental_rerun()
 
     cleaned_dfs = []
@@ -885,6 +999,7 @@ def upload_and_preprocess_widget():
                     )
 
             st.session_state["df"] = df
+            _workflow_mark(obj1_data_loaded=True, obj2_preprocessed=True)
             st.success("✨ Dataset preprocessed and stored in session.")
             st.write(f"Rows: {df.shape[0]} — Columns: {df.shape[1]}")
             st.dataframe(df.head())
@@ -1005,6 +1120,15 @@ if page == "🏠 Home":
         unsafe_allow_html=True,
     )
     st.write("---")
+    render_objective_banner(
+        "Objectives 1–2: Data Gathering → Preprocessing",
+        [
+            OBJECTIVES[0],
+            OBJECTIVES[1],
+        ],
+        next_hint="After uploading & preprocessing, go to 🤖 Modeling to train models.",
+    )
+    st.write("")
     upload_and_preprocess_widget()
 
 elif page == "🤖 Modeling":
@@ -1012,6 +1136,17 @@ elif page == "🤖 Modeling":
     st.markdown(
         "Train Random Forest models for Fertility (Regression) or Soil Health (Classification)."
     )
+
+    render_objective_banner(
+        "Objective 4: Predictive Modeling",
+        [
+            OBJECTIVES[3],
+            "Train a Random Forest for Fertility (Classification) or Nitrogen (Regression).",
+            "Optional: Train N/P/K nutrient-deficiency predictors (below).",
+        ],
+        next_hint="After training, go to 📈 Results to evaluate accuracy/precision and explore predictions.",
+    )
+    st.write("")
     if st.session_state["df"] is None:
         st.info("Please upload a dataset first in 'Home'.")
     else:
@@ -1189,9 +1324,108 @@ elif page == "🤖 Modeling":
                         "permutation_importance": perm_data,
                     }
                     st.session_state["trained_on_features"] = selected_features
+                    _workflow_mark(obj4_model_trained=True)
                     st.success(
                         "✅ Training completed. Go to 'Results' to inspect performance and explanations."
                     )
+
+
+# =====================
+        # Objective 4 (Extension): Nutrient deficiency prediction
+        # =====================
+        st.markdown("---")
+        st.subheader("🧪 Nutrient Deficiency Prediction (Optional)")
+        st.caption(
+            "Objective 4 extension: train additional Random Forest regressors to **predict nutrient levels** "
+            "(Nitrogen / Phosphorus / Potassium) and help flag potential deficiencies."
+        )
+
+        with st.expander("Train nutrient-level predictors (N / P / K)", expanded=False):
+            available_targets = [c for c in ["Nitrogen", "Phosphorus", "Potassium"] if c in df.columns]
+            if not available_targets:
+                st.info("N/P/K columns not found in your dataset. Upload data that contains nutrient columns to use this feature.")
+            else:
+                targets = st.multiselect(
+                    "Select nutrient targets to predict",
+                    options=available_targets,
+                    default=available_targets[:1],
+                    key="nutrient_targets_select",
+                )
+
+                base_numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+                for loccol in ["Latitude", "Longitude"]:
+                    if loccol in base_numeric:
+                        base_numeric.remove(loccol)
+
+                # Features exclude the selected target(s) to avoid leakage.
+                candidate_features = [c for c in base_numeric if c not in set(targets)]
+                if not candidate_features:
+                    st.warning("No valid numeric features left after excluding the target(s).")
+                else:
+                    feat_nut = st.multiselect(
+                        "Features used to predict the selected nutrient(s)",
+                        options=candidate_features,
+                        default=candidate_features,
+                        key="nutrient_feature_select",
+                        help="Tip: keep pH, Moisture, Organic Matter, and other soil indicators.",
+                    )
+
+                    colN1, colN2 = st.columns(2)
+                    with colN1:
+                        n_estimators_n = st.slider("n_estimators (nutrient models)", 50, 500, 200, 50, key="nut_n_estimators")
+                    with colN2:
+                        max_depth_n = st.slider("max_depth (nutrient models)", 2, 50, 14, key="nut_max_depth")
+
+                    if st.button("🧠 Train nutrient predictors", key="train_nutrient_models_btn"):
+                        if not targets or not feat_nut:
+                            st.warning("Choose at least one target and at least one feature.")
+                        else:
+                            with st.spinner("Training nutrient prediction models..."):
+                                # Scale features (consistent with the main modeling flow)
+                                Xn = df[feat_nut].copy()
+                                Xn = Xn.apply(pd.to_numeric, errors="coerce").fillna(Xn.median(numeric_only=True))
+
+                                scaler_n = MinMaxScaler()
+                                Xn_scaled = scaler_n.fit_transform(Xn)
+                                Xn_scaled_df = pd.DataFrame(Xn_scaled, columns=feat_nut)
+
+                                # Train one model per nutrient target
+                                trained = {}
+                                metrics = {}
+                                for tgt in targets:
+                                    yn = pd.to_numeric(df[tgt], errors="coerce")
+                                    yn = yn.fillna(yn.median())
+
+                                    X_train, X_test, y_train, y_test = train_test_split(
+                                        Xn_scaled_df, yn, test_size=0.2, random_state=42
+                                    )
+
+                                    m_n = RandomForestRegressor(
+                                        n_estimators=n_estimators_n,
+                                        max_depth=max_depth_n,
+                                        random_state=42,
+                                        n_jobs=-1,
+                                    )
+                                    m_n.fit(X_train, y_train)
+                                    pred_n = m_n.predict(X_test)
+
+                                    rmse_n = float(np.sqrt(mean_squared_error(y_test, pred_n)))
+                                    r2_n = float(r2_score(y_test, pred_n))
+
+                                    trained[tgt] = m_n
+                                    metrics[tgt] = {"RMSE": rmse_n, "R2": r2_n}
+
+                                # Store in session
+                                st.session_state["nutrient_models"].update(trained)
+                                # Use one scaler per run for all nutrient models (same feature set)
+                                for tgt in targets:
+                                    st.session_state["nutrient_scalers"][tgt] = scaler_n
+                                    st.session_state["nutrient_features"][tgt] = feat_nut
+
+                                _workflow_mark(obj4_model_trained=True)
+
+                                st.success("✅ Nutrient predictors trained and saved in session.")
+                                st.dataframe(pd.DataFrame(metrics).T, use_container_width=True)
 
 elif page == "📊 Visualization":
     st.title("📊 Visual Analytics")
@@ -1199,10 +1433,21 @@ elif page == "📊 Visualization":
         "All charts are organized by goal: **EDA** (understand the data), **Spatial** (maps), and **Clusters** (groupings)."
     )
 
+    render_objective_banner(
+        "Objective 3: Key Soil Parameters & Trends",
+        [
+            OBJECTIVES[2],
+            "Use EDA (distributions + correlations), Spatial maps, and Clusters to spot patterns.",
+        ],
+        next_hint="Tip: Train a model in 🤖 Modeling, then confirm the most influential parameters in 📈 Results.",
+    )
+    st.write("")
+
     if st.session_state["df"] is None:
         st.info("Please upload data first in 'Home' (Upload Data is integrated there).")
     else:
         df = st.session_state["df"].copy()
+        _workflow_mark(obj3_params_identified=True)
 
         # Ensure a fertility label exists (used by several visuals)
         if "Nitrogen" in df.columns and "Fertility_Level" not in df.columns:
@@ -1771,11 +2016,23 @@ elif page == "📊 Visualization":
 
 elif page == "📈 Results":
     st.title("📈 Model Results & Interpretation")
+
+    render_objective_banner(
+        "Objective 5: Model Evaluation for Precision",
+        [
+            OBJECTIVES[4],
+            "Inspect Accuracy / Precision / Recall / F1 (Classification) or RMSE/MAE/R² (Regression).",
+            "Use Feature Importance & Permutation Importance to validate key drivers (Objective 3).",
+        ],
+        next_hint="After evaluation, use 🌿 Insights to translate findings into crop & management guidance.",
+    )
+    st.write("")
     if not st.session_state.get("results"):
         st.info(
             "No trained model in session. Train a model first (Modeling or Quick Model)."
         )
     else:
+        _workflow_mark(obj5_evaluated=True, obj3_params_identified=True)
         results = st.session_state["results"]
         task = results["task"]
         y_test = np.array(results["y_test"])
@@ -2099,6 +2356,114 @@ elif page == "📈 Results":
                         )
                 except Exception as e:
                     st.error(f"Prediction failed: {e}")
+
+
+# =====================
+        # Objective 4 (Extension): Nutrient deficiency explorer (based on trained nutrient models)
+        # =====================
+        st.markdown("---")
+        st.subheader("🧪 Nutrient Deficiency Explorer (Optional)")
+        st.caption(
+            "If you trained the optional nutrient predictors in 🤖 Modeling, you can use them here to estimate "
+            "N/P/K levels and flag potential nutrient gaps."
+        )
+
+        nutrient_models = st.session_state.get("nutrient_models", {})
+        nutrient_features_map = st.session_state.get("nutrient_features", {})
+        nutrient_scalers_map = st.session_state.get("nutrient_scalers", {})
+        df_full = st.session_state.get("df")
+
+        if not nutrient_models:
+            st.info("No nutrient predictors found. (Optional) Train them in 🤖 Modeling → 'Nutrient Deficiency Prediction'.")
+        elif df_full is None:
+            st.info("Dataset not found in session; cannot derive input ranges for nutrient explorer.")
+        else:
+            available_tgts = [t for t in ["Nitrogen", "Phosphorus", "Potassium"] if t in nutrient_models]
+            if not available_tgts:
+                st.info("Nutrient predictors are present, but none match Nitrogen/Phosphorus/Potassium.")
+            else:
+                # Union of features across available targets (so one form works for all)
+                union_feats = []
+                for t in available_tgts:
+                    feats = nutrient_features_map.get(t, [])
+                    for f in feats:
+                        if f not in union_feats:
+                            union_feats.append(f)
+
+                with st.form("nutrient_deficiency_form"):
+                    st.markdown("Provide a hypothetical soil sample, then predict nutrient levels.")
+                    input_vals = {}
+                    for f in union_feats:
+                        if f in df_full.columns and pd.api.types.is_numeric_dtype(df_full[f]):
+                            col_min = float(df_full[f].min())
+                            col_max = float(df_full[f].max())
+                            if col_min == col_max:
+                                col_min -= 0.1
+                                col_max += 0.1
+                            default_val = float(df_full[f].median())
+                            step = (col_max - col_min) / 100.0
+                            if step <= 0:
+                                step = 0.01
+                            input_vals[f] = st.slider(
+                                f,
+                                min_value=float(col_min),
+                                max_value=float(col_max),
+                                value=float(default_val),
+                                step=float(step),
+                                key=f"nut_in_{f}",
+                            )
+                        else:
+                            input_vals[f] = st.number_input(f, value=0.0, key=f"nut_in_num_{f}")
+
+                    run_pred = st.form_submit_button("Predict N/P/K (Deficiency Check)")
+
+                if run_pred:
+                    sample = pd.DataFrame([input_vals])
+
+                    def _bucket_by_quantiles(series: pd.Series, val: float):
+                        q1, q2 = series.quantile([0.33, 0.66]).values
+                        if val <= q1:
+                            return "Low (Possible deficiency)"
+                        if val <= q2:
+                            return "Moderate"
+                        return "High"
+
+                    rows = []
+                    for tgt in available_tgts:
+                        model_t = nutrient_models.get(tgt)
+                        scaler_t = nutrient_scalers_map.get(tgt)
+                        feats_t = nutrient_features_map.get(tgt, [])
+
+                        if (model_t is None) or (scaler_t is None) or (not feats_t):
+                            continue
+                        if any(f not in sample.columns for f in feats_t):
+                            continue
+
+                        try:
+                            Xs = sample[feats_t]
+                            Xs_scaled = scaler_t.transform(Xs)
+                            pred_val = float(model_t.predict(Xs_scaled)[0])
+
+                            if tgt in df_full.columns:
+                                status = _bucket_by_quantiles(df_full[tgt].dropna(), pred_val)
+                            else:
+                                status = "—"
+
+                            rows.append({"Nutrient": tgt, "Predicted": round(pred_val, 4), "Status": status})
+                        except Exception as e:
+                            rows.append({"Nutrient": tgt, "Predicted": "Error", "Status": str(e)})
+
+                    if rows:
+                        out_df = pd.DataFrame(rows)
+                        st.dataframe(out_df, use_container_width=True)
+
+                        st.markdown("**General guidance (non-prescriptive):**")
+                        st.markdown("- **Low Nitrogen** → consider organic matter, legume rotation, or N fertilization (crop-dependent).")
+                        st.markdown("- **Low Phosphorus** → consider phosphate amendments and pH management (P availability depends on pH).")
+                        st.markdown("- **Low Potassium** → consider potash sources and residue/compost management.")
+                        st.caption("Always validate with lab results and local agronomy recommendations for your crop and soil type.")
+                    else:
+                        st.info("No predictions were produced. Ensure your nutrient models and feature columns match this dataset.")
 
 elif page == "🌿 Insights":
     st.title("🌿 Soil Health Insights & Crop Recommendations")
