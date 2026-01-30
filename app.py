@@ -316,40 +316,6 @@ def render_objective_banner(step_title: str, bullets: list[str], next_hint: str 
         unsafe_allow_html=True,
     )
 
-def render_workflow_tracker_sidebar() -> None:
-    """Small, non-intrusive workflow tracker in the sidebar."""
-    done = _workflow_infer_completion()
-
-    def _row(label, ok):
-        icon = "✅" if ok else "⬜"
-        return f"{icon} {label}"
-
-    st.markdown("### ✅ Objectives Flow")
-    st.caption("Follow the steps (1→5). Your progress is remembered while the app is running.")
-
-    st.write(_row("1. Data gathering & consolidation", done["obj1_data_loaded"]))
-    st.write(_row("2. Preprocessing & scanning", done["obj2_preprocessed"]))
-    st.write(_row("3. Key parameters & trends", done["obj3_params_identified"]))
-    st.write(_row("4. Predictive modeling", done["obj4_model_trained"]))
-    st.write(_row("5. Precision / evaluation", done["obj5_evaluated"]))
-
-    st.markdown("##### Jump to step")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("1–2 Home", use_container_width=True):
-            st.session_state["page_override"] = "🏠 Home"
-            st.experimental_rerun()
-        if st.button("4 Model", use_container_width=True):
-            st.session_state["page_override"] = "🤖 Modeling"
-            st.experimental_rerun()
-    with c2:
-        if st.button("3 Visuals", use_container_width=True):
-            st.session_state["page_override"] = "📊 Visualization"
-            st.experimental_rerun()
-        if st.button("5 Results", use_container_width=True):
-            st.session_state["page_override"] = "📈 Results"
-            st.experimental_rerun()
-
 
 # === APPLY THEME (FIXED, CLEAN, WORKING) ===
 
@@ -2978,3 +2944,4 @@ elif page == "👤 About":
         unsafe_allow_html=True,
     )
     st.write("Developed for a capstone project.")
+
