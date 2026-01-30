@@ -6,7 +6,7 @@ import folium
 from folium.plugins import HeatMap, FastMarkerCluster
 from streamlit_folium import st_folium
 from streamlit_option_menu import option_menu
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score, cross_validate
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (
@@ -1335,21 +1335,45 @@ elif page == "🤖 Modeling":
                             pass
 
                     try:
-                        cv_scores = cross_val_score(
-                            model,
-                            X_scaled_df,
-                            y,
-                            cv=5,
-                            scoring=(
-                                "accuracy"
-                                if st.session_state["task_mode"] == "Classification"
-                                else "r2"
-                            ),
-                        )
-                        cv_summary = {
-                            "mean_cv": float(np.mean(cv_scores)),
-                            "std_cv": float(np.std(cv_scores)),
-                        }
+                        if st.session_state["task_mode"] == "Classification":
+                            cv_scores = cross_val_score(
+                                model,
+                                X_scaled_df,
+                                y,
+                                cv=5,
+                                scoring="accuracy",
+                            )
+                            cv_summary = {
+                                "mean_cv": float(np.mean(cv_scores)),
+                                "std_cv": float(np.std(cv_scores)),
+                            }
+                        else:
+                            cv_res = cross_validate(
+                                model,
+                                X_scaled_df,
+                                y,
+                                cv=5,
+                                scoring={
+                                    "r2": "r2",
+                                    "rmse": "neg_root_mean_squared_error",
+                                    "mae": "neg_mean_absolute_error",
+                                },
+                                return_train_score=False,
+                            )
+                            r2_scores = np.array(cv_res.get("test_r2", []), dtype=float)
+                            rmse_scores = -np.array(cv_res.get("test_rmse", []), dtype=float)
+                            mae_scores = -np.array(cv_res.get("test_mae", []), dtype=float)
+
+                            cv_summary = {
+                                "mean_cv": float(np.mean(r2_scores)) if len(r2_scores) else None,
+                                "std_cv": float(np.std(r2_scores)) if len(r2_scores) else None,
+                                "r2_mean": float(np.mean(r2_scores)) if len(r2_scores) else None,
+                                "r2_std": float(np.std(r2_scores)) if len(r2_scores) else None,
+                                "rmse_mean": float(np.mean(rmse_scores)) if len(rmse_scores) else None,
+                                "rmse_std": float(np.std(rmse_scores)) if len(rmse_scores) else None,
+                                "mae_mean": float(np.mean(mae_scores)) if len(mae_scores) else None,
+                                "mae_std": float(np.std(mae_scores)) if len(mae_scores) else None,
+                            }
                     except Exception:
                         cv_summary = None
 
@@ -1381,6 +1405,7 @@ elif page == "🤖 Modeling":
                         "y_pred": np.array(y_pred).tolist(),
                         "model_name": f"Random Forest {st.session_state['task_mode']} Model",
                         "X_columns": selected_features,
+                        "X_test_rows": X_test.head(500).to_dict("records"),
                         "feature_importances": model.feature_importances_.tolist(),
                         "cv_summary": cv_summary,
                         "permutation_importance": perm_data,
@@ -2080,10 +2105,30 @@ elif page == "📈 Results":
             st.write(f"**Features:** {', '.join(results.get('X_columns', []))}")
             if results.get("cv_summary"):
                 cv = results["cv_summary"]
-                st.write(
-                    f"Cross-val mean: **{cv['mean_cv']:.3f}** "
-                    f"(std: {cv['std_cv']:.3f})"
-                )
+                # Classification: one headline CV metric (accuracy)
+                if task == "Classification":
+                    if cv.get("mean_cv") is not None and cv.get("std_cv") is not None:
+                        st.write(
+                            f"Cross-val accuracy: **{cv['mean_cv']:.3f}** "
+                            f"(std: {cv['std_cv']:.3f})"
+                        )
+                # Regression: report CV R² + RMSE + MAE (mean ± std)
+                else:
+                    if cv.get("r2_mean") is not None and cv.get("r2_std") is not None:
+                        st.write(
+                            f"Cross-val R²: **{cv['r2_mean']:.3f}** "
+                            f"(std: {cv['r2_std']:.3f})"
+                        )
+                    if cv.get("rmse_mean") is not None and cv.get("rmse_std") is not None:
+                        st.write(
+                            f"Cross-val RMSE: **{cv['rmse_mean']:.3f}** "
+                            f"(std: {cv['rmse_std']:.3f})"
+                        )
+                    if cv.get("mae_mean") is not None and cv.get("mae_std") is not None:
+                        st.write(
+                            f"Cross-val MAE: **{cv['mae_mean']:.3f}** "
+                            f"(std: {cv['mae_std']:.3f})"
+                        )
         with colB:
             if st.button("💾 Save Model"):
                 if st.session_state.get("model"):
@@ -2178,6 +2223,17 @@ elif page == "📈 Results":
                 st.metric("RMSE", f"{rmse:.3f}")
                 st.metric("MAE", f"{mae:.3f}")
                 st.metric("R²", f"{r2:.3f}")
+                # Cross-validation summary (mean ± std)
+                cv = results.get("cv_summary") or {}
+                if cv.get("rmse_mean") is not None:
+                    st.markdown("**Cross-validation (5-fold)**")
+                    cv_tbl = pd.DataFrame([
+                        {"Metric": "R²", "Mean": cv.get("r2_mean"), "Std": cv.get("r2_std")},
+                        {"Metric": "RMSE", "Mean": cv.get("rmse_mean"), "Std": cv.get("rmse_std")},
+                        {"Metric": "MAE", "Mean": cv.get("mae_mean"), "Std": cv.get("mae_std")},
+                    ])
+                    st.dataframe(cv_tbl, use_container_width=True)
+
 
                 df_res = pd.DataFrame(
                     {"Actual_Nitrogen": y_test, "Predicted_Nitrogen": y_pred}
@@ -2286,6 +2342,48 @@ elif page == "📈 Results":
         else:
             st.info("Permutation importance not computed or unavailable.")
 
+        # =====================
+        # 🧠 SHAP Explanation (advanced) — Regression only
+        # =====================
+        if task != "Classification":
+            try:
+                import shap  # optional dependency
+                import matplotlib.pyplot as plt
+                _has_shap = True
+            except Exception:
+                shap = None
+                plt = None
+                _has_shap = False
+
+            if not _has_shap:
+                st.info("SHAP explanations are available if you install `shap` (add it to requirements.txt).")
+            else:
+                m = st.session_state.get("model")
+                x_rows = results.get("X_test_rows") or []
+                if m is not None and len(x_rows) > 0:
+                    try:
+                        X_explain = pd.DataFrame(x_rows)
+                        # Keep it fast in Streamlit
+                        if len(X_explain) > 300:
+                            X_explain = X_explain.sample(300, random_state=42)
+
+                        st.subheader("🧠 SHAP Explanation (advanced)")
+                        st.caption("SHAP shows how each feature contributes to the model prediction.")
+
+                        explainer = shap.TreeExplainer(m)
+                        shap_vals = explainer.shap_values(X_explain)
+
+                        plt.figure()
+                        shap.summary_plot(shap_vals, X_explain, show=False)
+                        st.pyplot(plt.gcf(), clear_figure=True)
+
+                        plt.figure()
+                        shap.summary_plot(shap_vals, X_explain, plot_type="bar", show=False)
+                        st.pyplot(plt.gcf(), clear_figure=True)
+                    except Exception as e:
+                        st.info(f"SHAP explanation could not be generated: {e}")
+
+
         if fi_list and feat_names:
             fi_pairs = list(zip(feat_names, fi_list))
             fi_pairs.sort(key=lambda x: x[1], reverse=True)
@@ -2296,7 +2394,7 @@ elif page == "📈 Results":
 
         st.markdown("---")
 
-        st.subheader("🔍 Prediction Explorer — Soil Health from Custom Sample")
+        st.subheader("🔍 Prediction Explorer — Custom Sample")
         model = st.session_state.get("model")
         scaler = st.session_state.get("scaler")
         df_full = st.session_state.get("df")
@@ -2311,10 +2409,13 @@ elif page == "📈 Results":
             st.info("Original dataset not found; cannot derive input ranges.")
         else:
             with st.form("prediction_form"):
-                st.markdown(
-                    "Provide a hypothetical soil sample to see predicted fertility "
-                    "or Nitrogen level."
-                )
+                if task == "Classification":
+                    st.markdown("Provide a hypothetical soil sample to predict fertility class.")
+                    submit_label = "Predict Fertility"
+                else:
+                    st.markdown("Provide a hypothetical soil sample to predict Nitrogen.")
+                    submit_label = "Predict Nitrogen"
+
                 input_values = {}
                 for f in feat_names:
                     if f in df_full.columns and pd.api.types.is_numeric_dtype(
@@ -2339,7 +2440,7 @@ elif page == "📈 Results":
                     else:
                         input_values[f] = st.number_input(f, value=0.0)
 
-                submitted = st.form_submit_button("Predict Soil Health")
+                submitted = st.form_submit_button(submit_label)
             if submitted:
                 sample_df = pd.DataFrame([input_values])
                 try:
@@ -2356,9 +2457,24 @@ elif page == "📈 Results":
                         )
                     else:
                         pred_nitrogen = float(pred)
-                        st.markdown(
-                            f"**Predicted Nitrogen:** `{pred_nitrogen:.3f}` (same units as your dataset)"
-                        )
+                        cv = results.get("cv_summary") or {}
+                        expected_rmse = None
+                        try:
+                            if cv.get("rmse_mean") is not None:
+                                expected_rmse = float(cv.get("rmse_mean"))
+                            else:
+                                expected_rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+                        except Exception:
+                            expected_rmse = None
+
+                        if expected_rmse is not None:
+                            st.markdown(
+                                f"**Predicted Nitrogen:** `{pred_nitrogen:.3f}` ± `{expected_rmse:.3f}` (expected error, RMSE)"
+                            )
+                        else:
+                            st.markdown(
+                                f"**Predicted Nitrogen:** `{pred_nitrogen:.3f}` (same units as your dataset)"
+                            )
                         if (
                             df_full is not None
                             and "Nitrogen" in df_full.columns
